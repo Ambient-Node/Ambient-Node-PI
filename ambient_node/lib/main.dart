@@ -4,6 +4,7 @@
 // - Mock AI / BLE services; replace with real implementations when available
 
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:ambient_node/services/ble_service.dart';
 import 'package:ambient_node/services/mock_ai_service.dart';
 import 'package:ambient_node/screens/dashboard_screen.dart';
@@ -40,6 +41,8 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
   final ble = BleService(
     namePrefix: 'Ambient',
+    serviceUuid: Guid('12345678-1234-5678-1234-56789abcdef0'),
+    writeCharUuid: Guid('12345678-1234-5678-1234-56789abcdef1'),
   );
   final ai = MockAIService();
 
@@ -53,17 +56,25 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     ai.start();
+
+    // BLE 연결 상태 모니터링 설정
+    ble.onConnectionStateChanged = (isConnected) {
+      if (mounted) {
+        setState(() => connected = isConnected);
+      }
+    };
   }
 
   @override
   void dispose() {
     ai.dispose();
+    ble.dispose();
     super.dispose();
   }
 
   Future<void> handleConnect() async {
-    final ok = await ble.connect();
-    if (ok) setState(() => connected = true);
+    await ble.connect();
+    // 연결 상태는 onConnectionStateChanged 콜백에서 처리됨
   }
 
   void sendState() {
