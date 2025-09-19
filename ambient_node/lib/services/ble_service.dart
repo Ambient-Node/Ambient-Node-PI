@@ -125,7 +125,7 @@ class BleService {
       }
 
       _txChar = candidate;
-      // 연결 상태는 _startConnectionMonitoring에서 실제 연결 확인 후 설정
+      onConnectionStateChanged?.call(true);
       return true;
     } catch (error) {
       print('BLE connection error: $error');
@@ -156,7 +156,6 @@ class BleService {
     if (_device != null) {
       _connectionSubscription = _device!.connectionState.listen((state) {
         final isConnected = state == BluetoothConnectionState.connected;
-        print('BLE connection state: $state, connected: $isConnected');
         onConnectionStateChanged?.call(isConnected);
         if (!isConnected) {
           _txChar = null;
