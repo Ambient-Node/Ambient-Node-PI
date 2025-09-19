@@ -78,15 +78,12 @@ class _MainShellState extends State<MainShell> {
   }
 
   void sendState() {
-    // 연결되어 있을 때만 전송
-    if (connected) {
-      ble.send({
-        'powerOn': powerOn,
-        'speed': speed,
-        'trackingOn': trackingOn,
-        'selectedFaceId': selectedFaceId,
-      });
-    }
+    ble.send({
+      'powerOn': powerOn,
+      'speed': speed,
+      'trackingOn': trackingOn,
+      'selectedFaceId': selectedFaceId,
+    });
   }
 
   @override
