@@ -30,6 +30,10 @@
 	<string>기기와 블루투스로 연결하여 제어하기 위해 필요합니다.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>블루투스 주변기기와 통신을 위해 필요합니다.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>사용자 프로필 사진을 촬영하기 위해 카메라 접근 권한이 필요합니다.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>사용자 프로필 사진을 선택하기 위해 갤러리 접근 권한이 필요합니다.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

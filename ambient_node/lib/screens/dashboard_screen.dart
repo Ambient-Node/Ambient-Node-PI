@@ -4,8 +4,6 @@ import 'package:ambient_node/widgets/fan_dashboard_widget.dart';
 class DashboardScreen extends StatelessWidget {
   final bool connected;
   final VoidCallback onConnect;
-  final bool powerOn;
-  final Function(bool) setPowerOn;
   final int speed;
   final Function(int) setSpeed;
   final bool trackingOn;
@@ -13,13 +11,12 @@ class DashboardScreen extends StatelessWidget {
   final VoidCallback openAnalytics;
   final String deviceName;
   final String? selectedUserName;
+  final String? selectedUserImagePath;
 
   const DashboardScreen({
     super.key,
     required this.connected,
     required this.onConnect,
-    required this.powerOn,
-    required this.setPowerOn,
     required this.speed,
     required this.setSpeed,
     required this.trackingOn,
@@ -27,6 +24,7 @@ class DashboardScreen extends StatelessWidget {
     required this.openAnalytics,
     this.deviceName = 'Ambient',
     this.selectedUserName,
+    this.selectedUserImagePath,
   });
 
   @override
@@ -41,14 +39,7 @@ class DashboardScreen extends StatelessWidget {
                 connected: connected,
                 deviceName: deviceName,
                 selectedUserName: selectedUserName,
-                powerOn: powerOn,
-                setPowerOn: (v) {
-                  if (v && !connected) {
-                    onConnect();
-                  } else {
-                    setPowerOn(v);
-                  }
-                },
+                selectedUserImagePath: selectedUserImagePath,
                 onConnect: onConnect,
                 speed: speed,
                 setSpeed: (double value) {

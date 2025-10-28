@@ -5,8 +5,6 @@ import 'package:ambient_node/widgets/app_top_bar.dart';
 class FanDashboardWidget extends StatefulWidget {
   final bool connected;
   final VoidCallback onConnect;
-  final bool powerOn;
-  final Function(bool) setPowerOn;
   final int speed; // 0~100
   final Function(double) setSpeed; // keep existing API (double)
   final bool trackingOn;
@@ -14,13 +12,12 @@ class FanDashboardWidget extends StatefulWidget {
   final VoidCallback openAnalytics;
   final String deviceName; // optional BT name
   final String? selectedUserName;
+  final String? selectedUserImagePath;
 
   const FanDashboardWidget({
     super.key,
     required this.connected,
     required this.onConnect,
-    required this.powerOn,
-    required this.setPowerOn,
     required this.speed,
     required this.setSpeed,
     required this.trackingOn,
@@ -28,6 +25,7 @@ class FanDashboardWidget extends StatefulWidget {
     required this.openAnalytics,
     this.deviceName = 'Ambient',
     this.selectedUserName,
+    this.selectedUserImagePath,
   });
 
   @override
@@ -57,13 +55,14 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
       duration: const Duration(milliseconds: 2000),
     );
 
-    if (widget.powerOn) _updateRotation();
+    if (widget.connected) _updateRotation();
   }
 
   @override
   void didUpdateWidget(FanDashboardWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.powerOn != oldWidget.powerOn ||
+    // 블루투스 연결 상태 또는 속도가 변경되면 애니메이션 업데이트
+    if (widget.connected != oldWidget.connected ||
         widget.speed != oldWidget.speed) {
       _updateRotation();
     }
@@ -92,7 +91,8 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
   }
 
   void _updateRotation() {
-    if (widget.powerOn && widget.speed > 0) {
+    // 블루투스 연결 + 속도 > 0 일 때만 회전
+    if (widget.connected && widget.speed > 0) {
       final duration =
           Duration(milliseconds: (2500 ~/ ((widget.speed / 20).clamp(1, 5))));
       _controller.duration = duration;
@@ -187,7 +187,10 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
   @override
   Widget build(BuildContext context) {
     final safeSpeed = widget.speed.clamp(0, 100);
-    final color = widget.powerOn ? _fanBlue : Colors.grey.shade400;
+    // 블루투스 연결 + 속도 > 0 일 때만 파란색
+    final color = (widget.connected && widget.speed > 0)
+        ? _fanBlue
+        : Colors.grey.shade400;
 
     return DefaultTextStyle.merge(
       style: const TextStyle(fontFamily: 'Sen'),
@@ -199,11 +202,9 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
             subtitle: widget.selectedUserName != null
                 ? '${widget.selectedUserName} 선택 중'
                 : "Lab Fan",
-            connected: widget.powerOn,
-            onConnectToggle: () {
-              // 스위치를 토글하면 전원을 켜고 끔
-              widget.setPowerOn(!widget.powerOn);
-            },
+            connected: widget.connected, // 블루투스 연결 상태
+            onConnectToggle: widget.onConnect,
+            userImagePath: widget.selectedUserImagePath,
           ),
           // 나머지 컨텐츠는 스크롤 가능
           Expanded(
@@ -249,17 +250,26 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
                         ),
                         const SizedBox(height: 20),
                         Builder(builder: (context) {
-                          const Color controlColor = Color(0xFF838799);
+                          // 블루투스 연결 상태에 따라 색상 변경
+                          final controlColor =
+                              widget.connected && widget.speed > 0
+                                  ? _fanBlue
+                                  : const Color(0xFF838799);
+
                           return Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               _roundControlButton(
                                 icon: Icons.remove,
-                                onTap: () => widget.setSpeed(
-                                    ((safeSpeed - 20).clamp(0, 100))
-                                        .toDouble()),
-                                color: controlColor,
+                                onTap: widget.connected
+                                    ? () => widget.setSpeed(
+                                        ((safeSpeed - 20).clamp(0, 100))
+                                            .toDouble())
+                                    : () {}, // 블루투스 꺼져있으면 아무 동작 안함
+                                color: widget.connected
+                                    ? controlColor
+                                    : Colors.grey.shade300,
                                 iconSize: 20,
                               ),
                               Text(
@@ -272,10 +282,14 @@ class _FanDashboardWidgetState extends State<FanDashboardWidget>
                               ),
                               _roundControlButton(
                                 icon: Icons.add,
-                                onTap: () => widget.setSpeed(
-                                    ((safeSpeed + 20).clamp(0, 100))
-                                        .toDouble()),
-                                color: controlColor,
+                                onTap: widget.connected
+                                    ? () => widget.setSpeed(
+                                        ((safeSpeed + 20).clamp(0, 100))
+                                            .toDouble())
+                                    : () {}, // 블루투스 꺼져있으면 아무 동작 안함
+                                color: widget.connected
+                                    ? controlColor
+                                    : Colors.grey.shade300,
                                 iconSize: 20,
                               ),
                             ],

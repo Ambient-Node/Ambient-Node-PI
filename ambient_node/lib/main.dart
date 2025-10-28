@@ -72,11 +72,11 @@ class _MainShellState extends State<MainShell> {
   // 앱의 핵심 상태 변수
   bool connected = true;
   String deviceName = 'Ambient';
-  bool powerOn = false;
-  int speed = 0;
+  int speed = 0; // 0이면 전원 OFF와 동일
   bool trackingOn = false;
   // 사용자 선택 상태 (모든 스크린이 공유)
   String? selectedUserName;
+  String? selectedUserImagePath;
 
   @override
   void initState() {
@@ -124,9 +124,8 @@ class _MainShellState extends State<MainShell> {
   void sendState() {
     if (!connected) return;
     ble.sendJson({
-      'powerOn': powerOn,
-      'speed': powerOn ? speed : 0,
-      'trackingOn': powerOn ? trackingOn : false,
+      'speed': speed, // 0이면 전원 OFF
+      'trackingOn': speed > 0 ? trackingOn : false,
     });
   }
 
@@ -136,11 +135,6 @@ class _MainShellState extends State<MainShell> {
       DashboardScreen(
         connected: connected,
         onConnect: handleConnect,
-        powerOn: powerOn,
-        setPowerOn: (v) {
-          setState(() => powerOn = v);
-          sendState();
-        },
         speed: speed,
         setSpeed: (v) {
           setState(() => speed = v);
@@ -154,14 +148,24 @@ class _MainShellState extends State<MainShell> {
         openAnalytics: () => setState(() => _index = 2),
         deviceName: deviceName,
         selectedUserName: selectedUserName,
+        selectedUserImagePath: selectedUserImagePath,
       ),
       ControlScreen(
         connected: connected,
         deviceName: deviceName,
         onConnect: handleConnect,
         selectedUserName: selectedUserName,
-        onUserSelectionChanged: (userName) {
-          setState(() => selectedUserName = userName);
+        onUserSelectionChanged: (userName, userImagePath) {
+          setState(() {
+            selectedUserName = userName;
+            selectedUserImagePath = userImagePath;
+          });
+        },
+        onUserDataSend: (data) {
+          // TODO: BLE를 통해 라즈베리파이로 사용자 데이터 전송
+          // 실제 구현 시 이미지를 Base64로 인코딩하여 전송해야 함
+          print('🔵 BLE 전송 준비: $data');
+          ble.sendJson(data);
         },
       ),
       const AnalyticsScreen(),
