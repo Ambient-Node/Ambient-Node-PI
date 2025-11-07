@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Hardware Container (Fan Service) - IMPROVED
+Hardware Container (Fan Service) - FIXED VERSION
 - BLE 데이터 수신
 - 2축 GPIO 제어 (팬 속도, 수평/수직 모터 회전)
 - MQTT 메시지 발행 및 구독
@@ -12,6 +12,7 @@ import json
 import base64
 import threading
 import queue
+import time
 import paho.mqtt.client as mqtt
 from datetime import datetime
 from pathlib import Path
@@ -27,18 +28,18 @@ try:
     from gi.repository import GLib
     from bluezero import peripheral
     BLE_AVAILABLE = True
-except ImportError:
-    print("[WARN] BLE libraries not available, running in MQTT-only mode")
+except ImportError as e:
+    print(f"[WARN] BLE libraries not available: {e}")
     BLE_AVAILABLE = False
 
 # GPIO 관련
 try:
     import RPi.GPIO as GPIO
     GPIO_AVAILABLE = True
-except (ImportError, RuntimeError):
-    print("[WARN] GPIO not available, running in simulation mode")
+except (ImportError, RuntimeError) as e:
+    print(f"[WARN] GPIO not available: {e}")
     GPIO_AVAILABLE = False
-    GPIO = None  # Placeholder to avoid NameError
+    GPIO = None
 
 # Configuration
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mqtt-broker")
@@ -52,11 +53,11 @@ NOTIFY_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2'
 DEVICE_NAME = 'AmbientNode'
 
 # GPIO Pin Configuration (2축 모터)
-FAN_PWM_PIN = 18         # BLDC 팬 속도 제어 (PWM)
-MOTOR_STEP_PIN_H = 21    # 수평 모터 스텝
-MOTOR_DIR_PIN_H = 20     # 수평 모터 방향
-MOTOR_STEP_PIN_V = 23    # 수직 모터 스텝
-MOTOR_DIR_PIN_V = 24     # 수직 모터 방향
+FAN_PWM_PIN = 18
+MOTOR_STEP_PIN_H = 21
+MOTOR_DIR_PIN_H = 20
+MOTOR_STEP_PIN_V = 23
+MOTOR_DIR_PIN_V = 24
 
 # Data paths
 DATA_DIR = Path("/var/lib/ambient-node")
@@ -67,87 +68,125 @@ USERS_DIR.mkdir(parents=True, exist_ok=True)
 # Global state
 _current_speed = 0
 _current_tracking = False
-_current_angle_h = 90  # 수평 각도 (0~180도)
-_current_angle_v = 90  # 수직 각도 (0~180도)
+_current_angle_h = 90
+_current_angle_v = 90
 _notify_char = None
 _pwm = None
 
+
 class FanService:
     def __init__(self):
-        self.mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID)
-        self.mqtt_client.on_connect = self.on_mqtt_connect
-        self.mqtt_client.on_message = self.on_mqtt_message
+        print("[FAN] ⚙️ Initializing Fan Service...")
         
-        # 명령 큐 (연속 BLE 전송 처리)
+        # MQTT 클라이언트 초기화 (최신 API)
+        try:
+            self.mqtt_client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2,
+                client_id=MQTT_CLIENT_ID
+            )
+            self.mqtt_client.on_connect = self.on_mqtt_connect
+            self.mqtt_client.on_message = self.on_mqtt_message
+            print("[MQTT] ✅ Client initialized (CallbackAPIVersion.VERSION2)")
+        except Exception as e:
+            print(f"[ERROR] MQTT client init failed: {e}")
+            raise
+        
+        # 명령 큐
         self.command_queue = queue.Queue()
-        threading.Thread(target=self.process_commands, daemon=True).start()
+        self.command_thread = threading.Thread(
+            target=self.process_commands,
+            daemon=True,
+            name="CommandProcessor"
+        )
+        self.command_thread.start()
+        print("[QUEUE] ✅ Command queue started")
         
         # GPIO 초기화
         if GPIO_AVAILABLE:
-            self.init_gpio()
+            try:
+                self.init_gpio()
+            except Exception as e:
+                print(f"[ERROR] GPIO init failed: {e}")
+        else:
+            print("[GPIO] ⚠️ Running in simulation mode")
         
         # MQTT 연결
-        self.connect_mqtt()
+        try:
+            self.connect_mqtt()
+        except Exception as e:
+            print(f"[ERROR] MQTT connection failed: {e}")
         
-        # BLE 초기화 (별도 스레드)
+        # BLE 초기화 (별도 스레드, 실패해도 서비스 계속)
         if BLE_AVAILABLE:
-            threading.Thread(target=self.init_ble, daemon=True).start()
+            self.ble_thread = threading.Thread(
+                target=self.init_ble,
+                daemon=True,
+                name="BLEService"
+            )
+            self.ble_thread.start()
+            print("[BLE] ⏳ BLE initialization started in background")
+        else:
+            print("[BLE] ⚠️ BLE not available, running in MQTT-only mode")
+        
+        print("[FAN] 🎉 Fan Service initialization complete!")
 
     def init_gpio(self):
-        """GPIO 핀 초기화 (2축 모터)"""
+        """GPIO 핀 초기화"""
+        GPIO.setwarnings(False)  # 경고 끄기
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(FAN_PWM_PIN, GPIO.OUT)
         
-        # 수평 모터
+        # 기존 설정 정리
+        try:
+            GPIO.cleanup()
+        except:
+            pass
+        
+        # 핀 설정
+        GPIO.setup(FAN_PWM_PIN, GPIO.OUT)
         GPIO.setup(MOTOR_STEP_PIN_H, GPIO.OUT)
         GPIO.setup(MOTOR_DIR_PIN_H, GPIO.OUT)
-        
-        # 수직 모터
         GPIO.setup(MOTOR_STEP_PIN_V, GPIO.OUT)
         GPIO.setup(MOTOR_DIR_PIN_V, GPIO.OUT)
         
-        # PWM 초기화 (BLDC 팬)
+        # PWM 초기화
         global _pwm
-        _pwm = GPIO.PWM(FAN_PWM_PIN, 1000)  # 1kHz
+        _pwm = GPIO.PWM(FAN_PWM_PIN, 1000)
         _pwm.start(0)
-        print("[GPIO] Initialized (2-axis motors + fan)")
+        
+        print("[GPIO] ✅ Initialized (2-axis motors + fan, warnings disabled)")
 
     def connect_mqtt(self):
-        """MQTT 브로커 연결"""
-        try:
-            # 재시도 로직: MQTT 브로커가 준비될 때까지 대기
-            max_retries = 10
-            retry_delay = 3  # seconds
-            
-            for attempt in range(max_retries):
-                try:
-                    print(f"[FAN] Attempting to connect to MQTT broker (attempt {attempt + 1}/{max_retries})...")
-                    self.mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-                    self.mqtt_client.loop_start()
-                    print(f"[MQTT] Connected to {MQTT_BROKER}:{MQTT_PORT}")
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        print(f"[FAN] Connection failed: {e}. Retrying in {retry_delay} seconds...")
-                        import time
-                        time.sleep(retry_delay)
-                    else:
-                        print(f"[ERROR] Failed to connect to MQTT broker after {max_retries} attempts: {e}")
-                        raise
-        except Exception as e:
-            print(f"[ERROR] Failed to connect to MQTT: {e}")
+        """MQTT 브로커 연결 (재시도 로직 포함)"""
+        max_retries = 10
+        retry_delay = 3
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"[MQTT] 🔄 Connecting to {MQTT_BROKER}:{MQTT_PORT} (attempt {attempt + 1}/{max_retries})...")
+                self.mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+                self.mqtt_client.loop_start()
+                print(f"[MQTT] ✅ Connected to broker!")
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"[MQTT] ⚠️ Connection failed: {e}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[ERROR] ❌ Failed to connect after {max_retries} attempts: {e}")
+                    raise
 
-    def on_mqtt_connect(self, client, userdata, flags, rc):
-        """MQTT 연결 성공 시"""
-        if rc == 0:
-            print("[MQTT] Connected successfully")
-            # AI 얼굴 감지 구독
+    def on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
+        """MQTT 연결 성공 (최신 API 시그니처)"""
+        if reason_code == 0:
+            print("[MQTT] 📡 Connected successfully")
             client.subscribe("ambient/ai/face-detected")
             client.subscribe("ambient/fan001/cmd/#")
-            print("[MQTT] Subscribed to topics")
+            print("[MQTT] 📬 Subscribed to topics")
+        else:
+            print(f"[MQTT] ❌ Connection failed with code: {reason_code}")
 
     def on_mqtt_message(self, client, userdata, msg):
-        """MQTT 메시지 수신 처리"""
+        """MQTT 메시지 수신"""
         try:
             topic = msg.topic
             payload = json.loads(msg.payload.decode('utf-8'))
@@ -160,7 +199,7 @@ class FanService:
             print(f"[ERROR] MQTT message error: {e}")
 
     def handle_mqtt_command(self, topic, payload):
-        """MQTT 명령 토픽 처리"""
+        """MQTT 명령 처리"""
         cmd = topic.split('/')[-1]
         
         if cmd == "speed":
@@ -172,25 +211,29 @@ class FanService:
             self.set_face_tracking(payload.get('enabled', False))
 
     def handle_face_detected(self, payload):
-        """얼굴 감지 시 2축 모터 회전"""
+        """얼굴 감지 처리"""
         angle_h = payload.get('angle_h', _current_angle_h)
         angle_v = payload.get('angle_v', _current_angle_v)
         user_id = payload.get('user_id')
         
-        print(f"[FACE] User {user_id}: H={angle_h}°, V={angle_v}°")
+        print(f"[FACE] 👤 User {user_id}: H={angle_h}°, V={angle_v}°")
         
         self.rotate_motor_2axis('horizontal', angle_h)
         self.rotate_motor_2axis('vertical', angle_v)
 
     def rotate_motor_2axis(self, axis, target_angle):
-        """2축 모터 제어 (horizontal/vertical)"""
+        """2축 모터 제어"""
         global _current_angle_h, _current_angle_v
         
         if not GPIO_AVAILABLE:
-            print(f"[MOTOR] Simulated {axis} to {target_angle}°")
+            print(f"[MOTOR] 🔧 Simulated {axis} → {target_angle}°")
+            if axis == 'horizontal':
+                _current_angle_h = target_angle
+            else:
+                _current_angle_v = target_angle
             return
         
-        # 현재 각도 및 핀 선택
+        # 핀 및 현재 각도 선택
         if axis == 'horizontal':
             current = _current_angle_h
             step_pin = MOTOR_STEP_PIN_H
@@ -202,30 +245,24 @@ class FanService:
         else:
             return
         
-        # 각도 범위 제한
         target_angle = max(0, min(180, target_angle))
-        
-        # 방향 설정
         direction = 1 if target_angle > current else 0
         GPIO.output(dir_pin, direction)
         
-        # 스텝 펄스 생성 (1도 = 10 스텝)
         steps = abs(int((target_angle - current) * 10))
         for i in range(steps):
             GPIO.output(step_pin, GPIO.HIGH)
-            threading.Event().wait(0.001)
+            time.sleep(0.001)
             GPIO.output(step_pin, GPIO.LOW)
-            threading.Event().wait(0.001)
+            time.sleep(0.001)
         
-        # 상태 업데이트
         if axis == 'horizontal':
             _current_angle_h = target_angle
         else:
             _current_angle_v = target_angle
         
-        print(f"[MOTOR] {axis.capitalize()} → {target_angle}°")
+        print(f"[MOTOR] ✅ {axis.capitalize()} → {target_angle}°")
         
-        # MQTT 상태 발행
         self.mqtt_client.publish("ambient/fan001/status/angle", json.dumps({
             "horizontal": _current_angle_h,
             "vertical": _current_angle_v,
@@ -233,7 +270,7 @@ class FanService:
         }))
 
     def set_fan_speed(self, speed):
-        """BLDC 팬 속도 설정 (0-100)"""
+        """팬 속도 설정"""
         global _current_speed
         
         if GPIO_AVAILABLE and _pwm:
@@ -241,9 +278,8 @@ class FanService:
         
         _current_speed = speed
         power = speed > 0
-        print(f"[FAN] Speed: {speed}%, Power: {power}")
+        print(f"[FAN] 🌀 Speed: {speed}%, Power: {'ON' if power else 'OFF'}")
         
-        # MQTT 상태 발행
         self.mqtt_client.publish("ambient/fan001/status/power", json.dumps({
             "state": "on" if power else "off",
             "timestamp": datetime.now().isoformat()
@@ -254,7 +290,6 @@ class FanService:
             "timestamp": datetime.now().isoformat()
         }))
         
-        # 이벤트 로깅
         self.mqtt_client.publish("ambient/db/log-event", json.dumps({
             "device_id": "fan001",
             "event_type": "speed",
@@ -263,7 +298,7 @@ class FanService:
         }))
 
     def set_face_tracking(self, enabled):
-        """얼굴 추적 ON/OFF"""
+        """얼굴 추적 설정"""
         global _current_tracking
         _current_tracking = enabled
         
@@ -272,7 +307,7 @@ class FanService:
             "timestamp": datetime.now().isoformat()
         }))
         
-        print(f"[FACE] Tracking: {enabled}")
+        print(f"[FACE] 👁️ Tracking: {'ON' if enabled else 'OFF'}")
 
     def save_user_image(self, user_id, image_base64):
         """사용자 이미지 저장"""
@@ -284,14 +319,15 @@ class FanService:
             image_data = base64.b64decode(image_base64)
             with open(image_path, 'wb') as f:
                 f.write(image_data)
-            print(f"[USER] Saved image: {image_path}")
+            print(f"[USER] 💾 Saved image: {image_path}")
             return str(image_path)
         except Exception as e:
             print(f"[ERROR] Failed to save image: {e}")
             return None
 
     def process_commands(self):
-        """명령 큐 순차 처리 (BLE 연속 전송 대응)"""
+        """명령 큐 처리"""
+        print("[QUEUE] 🔄 Command processor started")
         while True:
             try:
                 payload = self.command_queue.get(timeout=0.1)
@@ -299,24 +335,19 @@ class FanService:
                 self.command_queue.task_done()
             except queue.Empty:
                 pass
+            except Exception as e:
+                print(f"[ERROR] Command processing error: {e}")
 
     def handle_ble_write(self, payload):
-        """BLE 수신 데이터 처리"""
-        print(f"[BLE] 🔧 명령 처리 시작: {payload}")
+        """BLE 명령 처리"""
+        print(f"[BLE] 📦 Processing: {payload}")
         
-        # 팬 속도 제어
         if 'speed' in payload:
-            speed = payload['speed']
-            print(f"[BLE] 🌀 풍속 제어 명령: {speed}")
-            self.set_fan_speed(speed)
+            self.set_fan_speed(payload['speed'])
         
-        # 얼굴 추적 ON/OFF
         if 'trackingOn' in payload:
-            tracking = payload['trackingOn']
-            print(f"[BLE] 👁️ 얼굴 추적 명령: {tracking}")
-            self.set_face_tracking(tracking)
+            self.set_face_tracking(payload['trackingOn'])
         
-        # 액션별 처리
         action = payload.get('action')
         
         if action == 'register_user':
@@ -329,7 +360,6 @@ class FanService:
             if image_base64:
                 photo_path = self.save_user_image(user_id, image_base64)
             
-            # MQTT로 사용자 등록
             self.mqtt_client.publish("ambient/user/register", json.dumps({
                 "user_id": user_id,
                 "name": name,
@@ -339,10 +369,9 @@ class FanService:
             }))
         
         elif action == 'manual_control':
-            direction = payload.get('direction')  # 'up', 'down', 'left', 'right', 'stop'
-            step_angle = 5  # 한 번에 5도씩 이동
+            direction = payload.get('direction')
+            step_angle = 5
             
-            # 상대 각도 증감 (연속 클릭 지원)
             if direction == 'left':
                 target_h = max(0, _current_angle_h - step_angle)
                 self.rotate_motor_2axis('horizontal', target_h)
@@ -355,10 +384,7 @@ class FanService:
             elif direction == 'down':
                 target_v = min(180, _current_angle_v + step_angle)
                 self.rotate_motor_2axis('vertical', target_v)
-            elif direction == 'stop':
-                pass  # 정지 명령
             
-            # 이벤트 로깅
             self.mqtt_client.publish("ambient/db/log-event", json.dumps({
                 "device_id": "fan001",
                 "event_type": "manual_control",
@@ -374,24 +400,18 @@ class FanService:
         """BLE Write Characteristic 콜백"""
         try:
             data_str = bytes(value).decode('utf-8')
-            print(f"[BLE] 📥 데이터 수신 (raw): {data_str}")
-            payload = json.loads(data_str)
-            print(f"[BLE] 📦 파싱된 데이터: {payload}")
+            print(f"[BLE] 📥 Received: {data_str}")
+            payload = json.dumps(data_str)
             
-            # 큐에 추가 (순차 처리)
             self.command_queue.put(payload)
-            print(f"[BLE] ✅ 명령 큐에 추가됨 (큐 크기: {self.command_queue.qsize()})")
+            print(f"[BLE] ✅ Queued (size: {self.command_queue.qsize()})")
             
-            # BLE 응답 (ACK)
             if _notify_char:
-                ack_data = {
-                    "type": "ACK",
-                    "timestamp": datetime.now().isoformat()
-                }
+                ack_data = {"type": "ACK", "timestamp": datetime.now().isoformat()}
                 send_notification(ack_data)
-                print(f"[BLE] 📤 ACK 전송: {ack_data}")
+                print(f"[BLE] 📤 ACK sent")
         except Exception as e:
-            print(f"[ERROR] ❌ BLE write error: {e}")
+            print(f"[ERROR] BLE write error: {e}")
             import traceback
             traceback.print_exc()
 
@@ -400,20 +420,21 @@ class FanService:
         global _notify_char
         
         if not BLE_AVAILABLE:
-            print("[WARN] BLE not available, skipping BLE initialization")
+            print("[BLE] ⚠️ BLE not available")
             return
         
         try:
-            print("[BLE] 🔵 BLE 초기화 시작...")
+            print("[BLE] 🔵 Starting BLE initialization...")
+            
+            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+            
             adapter = peripheral.adapter.Adapter()
             adapter_address = adapter.address
-            print(f"[BLE] 📡 Adapter Address: {adapter_address}")
+            print(f"[BLE] 📡 Adapter: {adapter_address}")
             
             app = peripheral.localGATT.Application()
             service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
-            print(f"[BLE] 📦 Service UUID: {SERVICE_UUID}")
             
-            # Write Characteristic
             write_char = peripheral.localGATT.Characteristic(
                 1, 1, WRITE_CHAR_UUID, [],
                 False, ['write', 'encrypt-write'],
@@ -421,9 +442,7 @@ class FanService:
                 write_callback=self.on_ble_write_characteristic,
                 notify_callback=None,
             )
-            print(f"[BLE] ✍️ Write Characteristic UUID: {WRITE_CHAR_UUID}")
             
-            # Notify Characteristic
             _notify_char = peripheral.localGATT.Characteristic(
                 1, 2, NOTIFY_CHAR_UUID, [],
                 False, ['notify'],
@@ -431,7 +450,6 @@ class FanService:
                 write_callback=None,
                 notify_callback=None,
             )
-            print(f"[BLE] 🔔 Notify Characteristic UUID: {NOTIFY_CHAR_UUID}")
             
             app.add_managed_object(service)
             app.add_managed_object(write_char)
@@ -439,7 +457,6 @@ class FanService:
             
             gatt_manager = peripheral.GATT.GattManager(adapter_address)
             gatt_manager.register_application(app, {})
-            print("[BLE] ✅ GATT Application 등록 완료")
             
             advert = peripheral.advertisement.Advertisement(1, 'peripheral')
             advert.local_name = DEVICE_NAME
@@ -449,44 +466,47 @@ class FanService:
             ad_manager.register_advertisement(advert, {})
             
             print(f"[BLE] 🎉 Advertising as '{DEVICE_NAME}'")
-            print(f"[BLE] 📢 앱에서 '{DEVICE_NAME}' 기기를 검색할 수 있습니다")
+            print(f"[BLE] 📢 Ready for connections!")
             
-            # GLib main loop
             GLib.MainLoop().run()
         except Exception as e:
-            print(f"[ERROR] ❌ BLE initialization failed: {e}")
+            print(f"[ERROR] ❌ BLE init failed: {e}")
             import traceback
             traceback.print_exc()
 
-    def start(self):
-        """서비스 시작"""
-        print("[FAN] Starting Fan Service...")
-        try:
-            while True:
-                threading.Event().wait(1)
-        except KeyboardInterrupt:
-            print("\n[FAN] Shutting down...")
-            if GPIO_AVAILABLE and _pwm:
-                _pwm.stop()
-                GPIO.cleanup()
-            self.mqtt_client.loop_stop()
-            self.mqtt_client.disconnect()
-            print("[FAN] Fan Service stopped")
 
 def send_notification(data):
     """BLE Notification 발송"""
     global _notify_char
-    if _notify_char is None:
-        return
-    try:
-        message = json.dumps(data)
-        _notify_char.set_value(message.encode('utf-8'))
-    except Exception as e:
-        print(f"[ERROR] Notification error: {e}")
+    if _notify_char:
+        try:
+            message = json.dumps(data)
+            _notify_char.set_value(message.encode('utf-8'))
+        except Exception as e:
+            print(f"[ERROR] Notification error: {e}")
 
-def main():
-    service = FanService()
-    service.start()
+
+def signal_handler(sig, frame):
+    """종료 시그널 핸들러"""
+    print("\n[FAN] 🛑 Shutting down...")
+    if GPIO_AVAILABLE and _pwm:
+        _pwm.stop()
+        GPIO.cleanup()
+    sys.exit(0)
+
 
 if __name__ == "__main__":
-    main()
+    # 시그널 핸들러 등록
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # 서비스 시작
+    service = FanService()
+    
+    print("[INFO] 🚀 Service running... (Press Ctrl+C to stop)")
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[INFO] 👋 Service stopped by user")
