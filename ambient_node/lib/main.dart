@@ -4,15 +4,11 @@ import 'package:ambient_node/screens/splash_screen.dart';
 import 'package:ambient_node/screens/dashboard_screen.dart';
 import 'package:ambient_node/screens/analytics_screen.dart';
 import 'package:ambient_node/screens/control_screen.dart';
+import 'package:ambient_node/screens/device_selection_screen.dart';
 import 'package:ambient_node/services/analytics_service.dart';
+import 'package:ambient_node/services/test_ble_service.dart';
 
 class AiService {}
-
-class BleService {
-  Future<void> sendJson(Map<String, dynamic> data) async {
-    print('BLE Service: Sending JSON: $data');
-  }
-}
 
 void main() {
   runApp(const MyApp());
@@ -68,10 +64,10 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _index = 0;
-  final ble = BleService();
+  late final TestBleService ble;
 
   // 앱의 핵심 상태 변수
-  bool connected = true;
+  bool connected = false; // 초기값 false로 변경
   String deviceName = 'Ambient';
   int speed = 0; // 0이면 전원 OFF와 동일
   bool trackingOn = false;
@@ -82,54 +78,117 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    
+    // BLE 서비스 초기화
+    ble = TestBleService(
+      namePrefix: 'Ambient',
+      serviceUuid: null,
+      writeCharUuid: null,
+      notifyCharUuid: null,
+    );
+    
+    // BLE 연결 상태 콜백 설정
+    ble.onConnectionStateChanged = (isConnected) {
+      print('🔵 [BLE] 연결 상태 변경: $isConnected');
+      if (mounted) {
+        setState(() {
+          connected = isConnected;
+          if (!isConnected) {
+            speed = 0;
+            trackingOn = false;
+          }
+        });
+      }
+    };
+    
+    // BLE 기기 이름 콜백 설정
+    ble.onDeviceNameChanged = (name) {
+      print('🔵 [BLE] 기기 이름: $name');
+      if (mounted) {
+        setState(() {
+          deviceName = name;
+        });
+      }
+    };
+    
+    // BLE Notification 수신 콜백
+    ble.onPairingResponse = (response) {
+      print('🔵 [BLE] Notification 수신: $response');
+    };
+    
     // 분석 서비스 초기화
     AnalyticsService.onUserChanged(selectedUserName);
   }
 
   @override
   void dispose() {
+    ble.dispose();
     super.dispose();
   }
 
   // 블루투스 연결 화면을 띄우는 함수
   void handleConnect() {
-    // Navigator.of(context).push(
-    //   MaterialPageRoute(
-    //     builder: (context) => DeviceSelectionScreen(
-    //       bleService: TestBleService(
-    //         namePrefix: 'Ambient',
-    //         serviceUuid: null,
-    //         writeCharUuid: null,
-    //         notifyCharUuid: null,
-    //       ),
-    //       onDeviceNameChanged: (name) {
-    //         setState(() => deviceName = name);
-    //       },
-    //       onConnectionChanged: (isConnected) {
-    //         setState(() {
-    //           connected = isConnected;
-    //           if (isConnected) {
-    //             powerOn = true;
-    //             _showSnackBar('기기가 연결되었습니다.');
-    //           } else {
-    //             powerOn = false;
-    //             _showSnackBar('기기 연결이 해제되었습니다.');
-    //           }
-    //           sendState();
-    //         });
-    //       },
-    //     ),
-    //   ),
-    // );
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => DeviceSelectionScreen(
+          bleService: ble,
+          onConnectionChanged: (isConnected) {
+            print('🔵 [Main] 연결 상태 업데이트: $isConnected');
+            if (mounted) {
+              setState(() {
+                connected = isConnected;
+                if (isConnected) {
+                  _showSnackBar('기기가 연결되었습니다.');
+                  sendState();
+                } else {
+                  speed = 0;
+                  trackingOn = false;
+                  _showSnackBar('기기 연결이 해제되었습니다.');
+                }
+              });
+            }
+          },
+          onDeviceNameChanged: (name) {
+            print('🔵 [Main] 기기 이름 업데이트: $name');
+            if (mounted) {
+              setState(() => deviceName = name);
+            }
+          },
+        ),
+      ),
+    );
+  }
+  
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   // 현재 상태를 블루투스로 전송하는 함수
   void sendState() {
-    if (!connected) return;
-    ble.sendJson({
+    if (!connected) {
+      print('⚠️ [BLE] 연결되지 않음 - 전송 취소');
+      return;
+    }
+    
+    final data = {
       'speed': speed, // 0이면 전원 OFF
       'trackingOn': speed > 0 ? trackingOn : false,
-    });
+    };
+    
+    print('📤 [BLE] 데이터 전송: $data');
+    
+    try {
+      ble.sendJson(data);
+    } catch (e) {
+      print('❌ [BLE] 전송 실패: $e');
+      _showSnackBar('데이터 전송 실패');
+    }
   }
 
   @override

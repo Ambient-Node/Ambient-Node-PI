@@ -19,12 +19,16 @@ services:
     privileged: true
     devices:
       - /dev/ttyAMA0:/dev/ttyAMA0
+      - /dev/bluetooth:/dev/bluetooth   # 추가
+      - /dev/hci0:/dev/hci0 
     volumes:
       - /var/lib/ambient-node:/var/lib/ambient-node
-      - ./fan-service/fan_service.py:/app/fan_service.py:ro  # 코드 빠른 수정! (없으면 빼도 됨)
+      - /var/run/dbus:/var/run/dbus
     environment:
       - MQTT_BROKER=mqtt_broker
       - MQTT_PORT=1883
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket  # 추가
+
     networks:
       - ambient-network
     depends_on:
@@ -36,7 +40,6 @@ services:
     container_name: ambient-db-service
     volumes:
       - /var/lib/ambient-node:/var/lib/ambient-node
-      - ./db-service/db_service.py:/app/db_service.py:ro    # 코드 빠른 수정! (없으면 빼도 됨)
     environment:
       - MQTT_BROKER=mqtt_broker
       - MQTT_PORT=1883

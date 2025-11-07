@@ -302,15 +302,19 @@ class FanService:
 
     def handle_ble_write(self, payload):
         """BLE 수신 데이터 처리"""
-        print(f"[BLE] Received: {payload}")
+        print(f"[BLE] 🔧 명령 처리 시작: {payload}")
         
         # 팬 속도 제어
         if 'speed' in payload:
-            self.set_fan_speed(payload['speed'])
+            speed = payload['speed']
+            print(f"[BLE] 🌀 풍속 제어 명령: {speed}")
+            self.set_fan_speed(speed)
         
         # 얼굴 추적 ON/OFF
         if 'trackingOn' in payload:
-            self.set_face_tracking(payload['trackingOn'])
+            tracking = payload['trackingOn']
+            print(f"[BLE] 👁️ 얼굴 추적 명령: {tracking}")
+            self.set_face_tracking(tracking)
         
         # 액션별 처리
         action = payload.get('action')
@@ -370,33 +374,44 @@ class FanService:
         """BLE Write Characteristic 콜백"""
         try:
             data_str = bytes(value).decode('utf-8')
+            print(f"[BLE] 📥 데이터 수신 (raw): {data_str}")
             payload = json.loads(data_str)
+            print(f"[BLE] 📦 파싱된 데이터: {payload}")
             
             # 큐에 추가 (순차 처리)
             self.command_queue.put(payload)
+            print(f"[BLE] ✅ 명령 큐에 추가됨 (큐 크기: {self.command_queue.qsize()})")
             
             # BLE 응답 (ACK)
             if _notify_char:
-                send_notification({
+                ack_data = {
                     "type": "ACK",
                     "timestamp": datetime.now().isoformat()
-                })
+                }
+                send_notification(ack_data)
+                print(f"[BLE] 📤 ACK 전송: {ack_data}")
         except Exception as e:
-            print(f"[ERROR] BLE write error: {e}")
+            print(f"[ERROR] ❌ BLE write error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def init_ble(self):
         """BLE 서버 초기화"""
         global _notify_char
         
         if not BLE_AVAILABLE:
+            print("[WARN] BLE not available, skipping BLE initialization")
             return
         
         try:
+            print("[BLE] 🔵 BLE 초기화 시작...")
             adapter = peripheral.adapter.Adapter()
             adapter_address = adapter.address
+            print(f"[BLE] 📡 Adapter Address: {adapter_address}")
             
             app = peripheral.localGATT.Application()
             service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
+            print(f"[BLE] 📦 Service UUID: {SERVICE_UUID}")
             
             # Write Characteristic
             write_char = peripheral.localGATT.Characteristic(
@@ -406,6 +421,7 @@ class FanService:
                 write_callback=self.on_ble_write_characteristic,
                 notify_callback=None,
             )
+            print(f"[BLE] ✍️ Write Characteristic UUID: {WRITE_CHAR_UUID}")
             
             # Notify Characteristic
             _notify_char = peripheral.localGATT.Characteristic(
@@ -415,6 +431,7 @@ class FanService:
                 write_callback=None,
                 notify_callback=None,
             )
+            print(f"[BLE] 🔔 Notify Characteristic UUID: {NOTIFY_CHAR_UUID}")
             
             app.add_managed_object(service)
             app.add_managed_object(write_char)
@@ -422,6 +439,7 @@ class FanService:
             
             gatt_manager = peripheral.GATT.GattManager(adapter_address)
             gatt_manager.register_application(app, {})
+            print("[BLE] ✅ GATT Application 등록 완료")
             
             advert = peripheral.advertisement.Advertisement(1, 'peripheral')
             advert.local_name = DEVICE_NAME
@@ -430,12 +448,15 @@ class FanService:
             ad_manager = peripheral.advertisement.AdvertisingManager(adapter_address)
             ad_manager.register_advertisement(advert, {})
             
-            print(f"[BLE] Advertising as {DEVICE_NAME}")
+            print(f"[BLE] 🎉 Advertising as '{DEVICE_NAME}'")
+            print(f"[BLE] 📢 앱에서 '{DEVICE_NAME}' 기기를 검색할 수 있습니다")
             
             # GLib main loop
             GLib.MainLoop().run()
         except Exception as e:
-            print(f"[ERROR] BLE initialization failed: {e}")
+            print(f"[ERROR] ❌ BLE initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     def start(self):
         """서비스 시작"""
