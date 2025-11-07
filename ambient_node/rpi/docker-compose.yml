@@ -1,0 +1,52 @@
+services:
+  mqtt_broker:
+    image: eclipse-mosquitto:2.0
+    container_name: ambient-mqtt-broker
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mqtt-broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - /var/lib/ambient-node/mqtt/data:/mosquitto/data
+      - /var/lib/ambient-node/mqtt/log:/mosquitto/log
+    networks:
+      - ambient-network
+    restart: unless-stopped
+
+  fan_service:
+    image: jiyuniverse/ambient-node-fan-service:arm64   # 노트북에서 빌드해둔 이미지 태그 사용
+    container_name: ambient-fan-service
+    privileged: true
+    devices:
+      - /dev/ttyAMA0:/dev/ttyAMA0
+    volumes:
+      - /var/lib/ambient-node:/var/lib/ambient-node
+      - ./fan-service/fan_service.py:/app/fan_service.py:ro  # 코드 빠른 수정! (없으면 빼도 됨)
+    environment:
+      - MQTT_BROKER=mqtt_broker
+      - MQTT_PORT=1883
+    networks:
+      - ambient-network
+    depends_on:
+      - mqtt_broker
+    restart: unless-stopped
+
+  db_service:
+    image: jiyuniverse/ambient-node-db-service:arm64    # 노트북에서 빌드해둔 이미지 태그 사용
+    container_name: ambient-db-service
+    volumes:
+      - /var/lib/ambient-node:/var/lib/ambient-node
+      - ./db-service/db_service.py:/app/db_service.py:ro    # 코드 빠른 수정! (없으면 빼도 됨)
+    environment:
+      - MQTT_BROKER=mqtt_broker
+      - MQTT_PORT=1883
+      - DB_PATH=/var/lib/ambient-node/db.sqlite
+    networks:
+      - ambient-network
+    depends_on:
+      - mqtt_broker
+    restart: unless-stopped
+
+networks:
+  ambient-network:
+    driver: bridge
