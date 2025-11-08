@@ -1,0 +1,22 @@
+[Unit]
+Description=Ambient Node BLE Gateway Service
+After=network.target bluetooth.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=home/jiyun/ambient-node
+ExecStart=/usr/bin/python3 /home/jiyun/ambient-node/BLE_gateway/ble_gateway.py
+Restart=always
+RestartSec=10
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ambient-ble-gateway
+
+[Install]
+WantedBy=multi-user.target
