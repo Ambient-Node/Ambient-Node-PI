@@ -20,17 +20,7 @@ import os
 import sys
 import signal
 
-# BLE 관련
-try:
-    import dbus
-    import dbus.service
-    import dbus.mainloop.glib
-    from gi.repository import GLib
-    from bluezero import peripheral
-    BLE_AVAILABLE = True
-except ImportError as e:
-    print(f"[WARN] BLE libraries not available: {e}")
-    BLE_AVAILABLE = False
+# BLE는 호스트의 ble_gateway.py에서 처리
 
 # GPIO 관련
 try:
@@ -46,11 +36,7 @@ MQTT_BROKER = os.getenv("MQTT_BROKER", "mqtt-broker")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "fan-service")
 
-# BLE Configuration
-SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0'
-WRITE_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
-NOTIFY_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2'
-DEVICE_NAME = 'AmbientNode'
+# BLE는 호스트의 ble_gateway.py에서 처리
 
 # GPIO Pin Configuration (2축 모터)
 FAN_PWM_PIN = 18
@@ -70,7 +56,6 @@ _current_speed = 0
 _current_tracking = False
 _current_angle_h = 90
 _current_angle_v = 90
-_notify_char = None
 _pwm = None
 
 
@@ -116,19 +101,7 @@ class FanService:
         except Exception as e:
             print(f"[ERROR] MQTT connection failed: {e}")
         
-        # BLE 초기화 (별도 스레드, 실패해도 서비스 계속)
-        if BLE_AVAILABLE:
-            self.ble_thread = threading.Thread(
-                target=self.init_ble,
-                daemon=True,
-                name="BLEService"
-            )
-            self.ble_thread.start()
-            print("[BLE] ⏳ BLE initialization started in background")
-        else:
-            print("[BLE] ⚠️ BLE not available, running in MQTT-only mode")
-        
-        print("[FAN] 🎉 Fan Service initialization complete!")
+        print("[FAN] 🎉 Fan Service initialization complete (MQTT-only mode)!")
 
     def init_gpio(self):
         """GPIO 핀 초기화"""
@@ -181,6 +154,7 @@ class FanService:
             print("[MQTT] 📡 Connected successfully")
             client.subscribe("ambient/ai/face-detected")
             client.subscribe("ambient/fan001/cmd/#")
+            client.subscribe("ambient/user/register")  # BLE 게이트웨이에서 전달
             print("[MQTT] 📬 Subscribed to topics")
         else:
             print(f"[MQTT] ❌ Connection failed with code: {reason_code}")
@@ -195,6 +169,8 @@ class FanService:
                 self.handle_face_detected(payload)
             elif topic.startswith("ambient/fan001/cmd/"):
                 self.handle_mqtt_command(topic, payload)
+            elif topic == "ambient/user/register":
+                self.handle_user_register(payload)
         except Exception as e:
             print(f"[ERROR] MQTT message error: {e}")
 
@@ -209,6 +185,34 @@ class FanService:
             self.set_fan_speed(100 if power else 0)
         elif cmd == "face-tracking":
             self.set_face_tracking(payload.get('enabled', False))
+        elif cmd == "manual":
+            # 수동 제어 (BLE 게이트웨이에서 전달)
+            direction = payload.get('direction')
+            step_angle = 5
+            
+            if direction == 'left':
+                target_h = max(0, _current_angle_h - step_angle)
+                self.rotate_motor_2axis('horizontal', target_h)
+            elif direction == 'right':
+                target_h = min(180, _current_angle_h + step_angle)
+                self.rotate_motor_2axis('horizontal', target_h)
+            elif direction == 'up':
+                target_v = max(0, _current_angle_v - step_angle)
+                self.rotate_motor_2axis('vertical', target_v)
+            elif direction == 'down':
+                target_v = min(180, _current_angle_v + step_angle)
+                self.rotate_motor_2axis('vertical', target_v)
+            
+            self.mqtt_client.publish("ambient/db/log-event", json.dumps({
+                "device_id": "fan001",
+                "event_type": "manual_control",
+                "event_value": json.dumps({
+                    "direction": direction,
+                    "angle_h": _current_angle_h,
+                    "angle_v": _current_angle_v
+                }),
+                "timestamp": datetime.now().isoformat()
+            }))
 
     def handle_face_detected(self, payload):
         """얼굴 감지 처리"""
@@ -309,6 +313,29 @@ class FanService:
         
         print(f"[FACE] 👁️ Tracking: {'ON' if enabled else 'OFF'}")
 
+    def handle_user_register(self, payload):
+        """사용자 등록 처리 (BLE 게이트웨이에서 전달)"""
+        name = payload.get('name', '')
+        user_id = payload.get('user_id') or name.lower().replace(' ', '_')
+        bluetooth_id = payload.get('bluetooth_id')
+        image_base64 = payload.get('image_base64')
+        
+        # 이미지 저장
+        photo_path = None
+        if image_base64:
+            photo_path = self.save_user_image(user_id, image_base64)
+        
+        # DB 서비스로 전달
+        self.mqtt_client.publish("ambient/user/register", json.dumps({
+            "user_id": user_id,
+            "name": name,
+            "bluetooth_id": bluetooth_id,
+            "photo_path": photo_path,
+            "timestamp": datetime.now().isoformat()
+        }))
+        
+        print(f"[USER] ✅ Registered: {name} ({user_id})")
+    
     def save_user_image(self, user_id, image_base64):
         """사용자 이미지 저장"""
         user_dir = USERS_DIR / user_id
@@ -326,164 +353,17 @@ class FanService:
             return None
 
     def process_commands(self):
-        """명령 큐 처리"""
-        print("[QUEUE] 🔄 Command processor started")
+        """명령 큐 처리 (현재는 사용 안 함, MQTT로 직접 처리)"""
+        print("[QUEUE] 🔄 Command processor started (standby mode)")
         while True:
             try:
-                payload = self.command_queue.get(timeout=0.1)
-                self.handle_ble_write(payload)
+                payload = self.command_queue.get(timeout=1)
+                # 필요시 여기서 추가 처리
                 self.command_queue.task_done()
             except queue.Empty:
                 pass
             except Exception as e:
                 print(f"[ERROR] Command processing error: {e}")
-
-    def handle_ble_write(self, payload):
-        """BLE 명령 처리"""
-        print(f"[BLE] 📦 Processing: {payload}")
-        
-        if 'speed' in payload:
-            self.set_fan_speed(payload['speed'])
-        
-        if 'trackingOn' in payload:
-            self.set_face_tracking(payload['trackingOn'])
-        
-        action = payload.get('action')
-        
-        if action == 'register_user':
-            name = payload.get('name', '')
-            user_id = name.lower().replace(' ', '_')
-            bluetooth_id = payload.get('bluetooth_id')
-            
-            image_base64 = payload.get('image_base64') or payload.get('imagePath')
-            photo_path = None
-            if image_base64:
-                photo_path = self.save_user_image(user_id, image_base64)
-            
-            self.mqtt_client.publish("ambient/user/register", json.dumps({
-                "user_id": user_id,
-                "name": name,
-                "bluetooth_id": bluetooth_id,
-                "photo_path": photo_path,
-                "timestamp": datetime.now().isoformat()
-            }))
-        
-        elif action == 'manual_control':
-            direction = payload.get('direction')
-            step_angle = 5
-            
-            if direction == 'left':
-                target_h = max(0, _current_angle_h - step_angle)
-                self.rotate_motor_2axis('horizontal', target_h)
-            elif direction == 'right':
-                target_h = min(180, _current_angle_h + step_angle)
-                self.rotate_motor_2axis('horizontal', target_h)
-            elif direction == 'up':
-                target_v = max(0, _current_angle_v - step_angle)
-                self.rotate_motor_2axis('vertical', target_v)
-            elif direction == 'down':
-                target_v = min(180, _current_angle_v + step_angle)
-                self.rotate_motor_2axis('vertical', target_v)
-            
-            self.mqtt_client.publish("ambient/db/log-event", json.dumps({
-                "device_id": "fan001",
-                "event_type": "manual_control",
-                "event_value": json.dumps({
-                    "direction": direction,
-                    "angle_h": _current_angle_h,
-                    "angle_v": _current_angle_v
-                }),
-                "timestamp": datetime.now().isoformat()
-            }))
-
-    def on_ble_write_characteristic(self, value, options):
-        """BLE Write Characteristic 콜백"""
-        try:
-            data_str = bytes(value).decode('utf-8')
-            print(f"[BLE] 📥 Received: {data_str}")
-            payload = json.dumps(data_str)
-            
-            self.command_queue.put(payload)
-            print(f"[BLE] ✅ Queued (size: {self.command_queue.qsize()})")
-            
-            if _notify_char:
-                ack_data = {"type": "ACK", "timestamp": datetime.now().isoformat()}
-                send_notification(ack_data)
-                print(f"[BLE] 📤 ACK sent")
-        except Exception as e:
-            print(f"[ERROR] BLE write error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def init_ble(self):
-        """BLE 서버 초기화"""
-        global _notify_char
-        
-        if not BLE_AVAILABLE:
-            print("[BLE] ⚠️ BLE not available")
-            return
-        
-        try:
-            print("[BLE] 🔵 Starting BLE initialization...")
-            
-            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            
-            adapter = peripheral.adapter.Adapter()
-            adapter_address = adapter.address
-            print(f"[BLE] 📡 Adapter: {adapter_address}")
-            
-            app = peripheral.localGATT.Application()
-            service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
-            
-            write_char = peripheral.localGATT.Characteristic(
-                1, 1, WRITE_CHAR_UUID, [],
-                False, ['write', 'encrypt-write'],
-                read_callback=None,
-                write_callback=self.on_ble_write_characteristic,
-                notify_callback=None,
-            )
-            
-            _notify_char = peripheral.localGATT.Characteristic(
-                1, 2, NOTIFY_CHAR_UUID, [],
-                False, ['notify'],
-                read_callback=None,
-                write_callback=None,
-                notify_callback=None,
-            )
-            
-            app.add_managed_object(service)
-            app.add_managed_object(write_char)
-            app.add_managed_object(_notify_char)
-            
-            gatt_manager = peripheral.GATT.GattManager(adapter_address)
-            gatt_manager.register_application(app, {})
-            
-            advert = peripheral.advertisement.Advertisement(1, 'peripheral')
-            advert.local_name = DEVICE_NAME
-            advert.service_UUIDs = [SERVICE_UUID]
-            
-            ad_manager = peripheral.advertisement.AdvertisingManager(adapter_address)
-            ad_manager.register_advertisement(advert, {})
-            
-            print(f"[BLE] 🎉 Advertising as '{DEVICE_NAME}'")
-            print(f"[BLE] 📢 Ready for connections!")
-            
-            GLib.MainLoop().run()
-        except Exception as e:
-            print(f"[ERROR] ❌ BLE init failed: {e}")
-            import traceback
-            traceback.print_exc()
-
-
-def send_notification(data):
-    """BLE Notification 발송"""
-    global _notify_char
-    if _notify_char:
-        try:
-            message = json.dumps(data)
-            _notify_char.set_value(message.encode('utf-8'))
-        except Exception as e:
-            print(f"[ERROR] Notification error: {e}")
 
 
 def signal_handler(sig, frame):
