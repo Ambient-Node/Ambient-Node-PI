@@ -240,7 +240,7 @@ def setup_gatt_and_advertising():
     service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
 
     write_char = peripheral.localGATT.Characteristic(
-        1, 1, WRITE_CHAR_UUID, [], False, ['write'],
+        1, 1, WRITE_CHAR_UUID, [], False, ['write-without-response', 'write'],
         read_callback=None, write_callback=on_write_characteristic, notify_callback=None
     )
 
