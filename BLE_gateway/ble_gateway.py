@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""BLE Gateway Service - 청크 수신 지원"""
-
+"""BLE Gateway Service - 청크 수신 지원, 사용자 선택/해제 처리"""
+import base64
+import os
 import json
 import threading
 import time
@@ -45,6 +46,9 @@ _agent_path = '/ambient/agent'
 _chunk_buffer = []
 _chunk_total = 0
 
+# 이미지 저장 경로
+USER_IMAGES_DIR = "/var/lib/ambient-node/users"
+
 
 class PairingAgent(dbus.service.Object):
     def __init__(self, bus):
@@ -86,6 +90,28 @@ def register_pairing_agent():
     return agent
 
 
+def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> str:
+    """
+    base64 문자열을 디코딩하여 PNG 파일로 저장
+    """
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"[IMAGE] Created user directory: {save_dir}")
+    
+    try:
+        img_data = base64.b64decode(base64_str)
+        save_path = os.path.join(save_dir, filename)
+        
+        with open(save_path, 'wb') as f:
+            f.write(img_data)
+        
+        print(f"[IMAGE] ✅ Saved user photo at {save_path}")
+        return save_path
+    except Exception as e:
+        print(f"[IMAGE] ❌ Save failed: {e}")
+        return ""
+
+
 def on_write_characteristic(value, options):
     """BLE Write 수신 - 청크 처리 포함"""
     global _mqtt_client, _chunk_buffer, _chunk_total
@@ -100,7 +126,7 @@ def on_write_characteristic(value, options):
             
             if header == 'END':
                 # 청크 수신 완료
-                print(f'[BLE] 청크 수신 완료: 총 {len(_chunk_buffer)}개')
+                print(f'[BLE] ✅ 청크 수신 완료: 총 {len(_chunk_buffer)}개')
                 full_data = ''.join(_chunk_buffer)
                 _chunk_buffer = []
                 _chunk_total = 0
@@ -118,11 +144,14 @@ def on_write_characteristic(value, options):
                 
                 _chunk_buffer.append(chunk_data)
                 _chunk_total = total_chunks
-                print(f'[BLE] 청크 수신: {chunk_num + 1}/{total_chunks}')
+                
+                # 10개마다 또는 마지막에만 로그
+                if (chunk_num + 1) % 10 == 0 or (chunk_num + 1) == total_chunks:
+                    print(f'[BLE] 청크 수신: {chunk_num + 1}/{total_chunks}')
                 return
         
         # 일반 데이터 (청크 아님)
-        print(f'[BLE] 수신: {data_str[:100]}...')  # 처음 100자만 출력
+        print(f'[BLE] 📥 일반 데이터 수신: {data_str[:100]}...')
         process_complete_data(data_str)
 
     except Exception as e:
@@ -132,7 +161,7 @@ def on_write_characteristic(value, options):
 
 
 def process_complete_data(data_str):
-    """완전한 데이터 처리"""
+    """완전한 데이터 처리 - 최신 토픽 구조에 맞게 매핑"""
     global _mqtt_client
 
     try:
@@ -147,92 +176,127 @@ def process_complete_data(data_str):
 
     action = payload.get('action', '')
 
-    # 토픽 매핑
+    # 토픽 매핑 (복수형 사용자 액션 통합)
     if action == 'register_user':
         topic = "ambient/user/register"
+        user_id = payload.get('name', '').lower().replace(' ', '_')
+        base64_img = payload.get('image_base64')
+        
+        # 이미지 저장 (PNG로 변환)
+        image_path = ""
+        if base64_img:
+            user_dir = os.path.join(USER_IMAGES_DIR, user_id)
+            filename = "face_001.png"
+            image_path = save_base64_image_to_png(base64_img, user_dir, filename)
+        
         mqtt_payload = {
-            "user_id": payload.get('name', '').lower().replace(' ', '_'),
+            "user_id": user_id,
             "name": payload.get('name', ''),
-            "bluetooth_id": payload.get('bluetooth_id'),
-            "image_base64": payload.get('image_base64'),
+            "bluetooth_id": payload.get('bluetooth_id', ''),
+            "image_path": image_path,  # 파일 시스템 경로
+            "image_base64": base64_img,  # 백업용
             "timestamp": timestamp
         }
-        print(f'[BLE] 사용자 등록: {mqtt_payload["name"]}')
+        print(f'[BLE] 🔐 사용자 등록: {mqtt_payload["name"]} (ID: {user_id})')
 
-    elif action == 'select_user':
+    elif action == 'select_users':
         topic = "ambient/user/select"
-        mqtt_payload = {"user_id": payload.get('user_id'), "timestamp": timestamp}
-        print(f'[BLE] 사용자 선택: {mqtt_payload["user_id"]}')
+        user_list = payload.get('users', [])
+        
+        if len(user_list) == 0:
+            print("[WARN] Empty user list in select_users")
+            return
+        
+        mqtt_payload = {
+            "user_list": user_list,
+            "count": len(user_list),
+            "timestamp": timestamp
+        }
+        print(f'[BLE] 👥 사용자 선택: {len(user_list)}명')
 
-    elif action == 'power' or 'power' in payload:
-        topic = "ambient/command/power"
-        mqtt_payload = {"state": payload.get('power') or payload.get('state'), "timestamp": timestamp}
-        print(f'[BLE] 전원: {mqtt_payload["state"]}')
+    elif action == 'deselect_users' or action == 'clearselection':
+        topic = "ambient/user/deselect"
+        mqtt_payload = {
+            "user_list": [],  # 빈 리스트로 해제 처리
+            "timestamp": timestamp
+        }
+        print(f'[BLE] ❌ 사용자 선택 해제')
 
     elif action == 'speed' or 'speed' in payload:
         topic = "ambient/command/speed"
-        mqtt_payload = {"level": payload.get('speed') or payload.get('level'), "timestamp": timestamp}
-        print(f'[BLE] 속도: {mqtt_payload["level"]}')
+        mqtt_payload = {
+            "level": int(payload.get('speed') or payload.get('level', 0)),
+            "timestamp": timestamp
+        }
+        print(f'[BLE] 💨 속도 설정: {mqtt_payload["level"]}')
 
-    elif action == 'angle' or action == 'manual_control' or 'direction' in payload:
+    elif action == 'angle' or 'manual_control' in payload or 'direction' in payload:
         topic = "ambient/command/angle"
-        mqtt_payload = {"direction": payload.get('direction') or payload.get('angle'), "timestamp": timestamp}
-        print(f'[BLE] 각도: {mqtt_payload["direction"]}')
-
-    elif action == 'face_tracking' or 'trackingOn' in payload:
-        topic = "ambient/command/face-tracking"
-        mqtt_payload = {"enabled": payload.get('trackingOn') or payload.get('enabled'), "timestamp": timestamp}
-        print(f'[BLE] 얼굴 추적: {mqtt_payload["enabled"]}')
+        direction = payload.get('direction') or payload.get('angle', 'center')
+        mqtt_payload = {
+            "direction": direction,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] 🔄 각도 조절: {direction}')
 
     elif action == 'stats_request':
         topic = "ambient/db/stats-request"
-        mqtt_payload = {"user_id": payload.get('user_id'), "period": payload.get('period', 'day'), "timestamp": timestamp}
-        print(f'[BLE] 통계 요청: {mqtt_payload["user_id"]}, 기간: {mqtt_payload["period"]}')
-
-    elif action == 'update_user':
-        topic = "ambient/user/update"
         mqtt_payload = {
-            "user_id": payload.get('user_id'),
-            "name": payload.get('name', ''),
-            "image_base64": payload.get('image_base64'),
+            "user_id": payload.get('user_id', ''),
+            "period": payload.get('period', 'day'),
             "timestamp": timestamp
         }
-        print(f'[BLE] 사용자 수정: {mqtt_payload["user_id"]}')
-    
-    elif action == 'delete_user':
-        topic = "ambient/user/delete"
-        mqtt_payload = {
-            "user_id": payload.get('user_id'),
-            "timestamp": timestamp
-        }
-        print(f'[BLE] 사용자 삭제: {mqtt_payload["user_id"]}')
+        print(f'[BLE] 📊 통계 요청: {mqtt_payload["user_id"]} ({mqtt_payload["period"]})')
 
     else:
         print(f'[WARN] Unknown action: {action}')
+        send_notification({"type": "ERROR", "message": f"Unknown action: {action}"})
         return
 
-    # MQTT 발행
+    # MQTT 발행 및 ACK 전송
     if _mqtt_client and _mqtt_client.is_connected():
-        if topic:
+        if topic and mqtt_payload:
             _mqtt_client.publish(topic, json.dumps(mqtt_payload))
-            print(f'[MQTT] Published to {topic}')
-            send_notification({"type": "ACK", "topic": topic, "timestamp": timestamp})
+            print(f'[MQTT] 📤 Published to {topic}')
+            
+            # 성공 ACK 전송
+            send_notification({
+                "type": "ACK",
+                "action": action,
+                "topic": topic,
+                "data": mqtt_payload,
+                "timestamp": timestamp
+            })
         else:
-            print(f'[WARN] No topic mapped for action: {action}')
+            print(f'[WARN] No valid topic or payload for action: {action}')
+            send_notification({
+                "type": "ERROR",
+                "message": f"No topic for {action}",
+                "timestamp": timestamp
+            })
     else:
-        print(f'[WARN] MQTT not connected')  
+        print(f'[WARN] MQTT not connected')
+        send_notification({
+            "type": "ERROR",
+            "message": "MQTT not connected",
+            "timestamp": timestamp
+        })
+
 
 def send_notification(data):
+    """BLE Notification 발송"""
     global _notify_char
     if _notify_char:
         try:
             message = json.dumps(data)
             _notify_char.set_value(message.encode('utf-8'))
+            print(f'[NOTIFY] 📤 Sent: {message[:100]}...')
         except Exception as e:
             print(f'[NOTIFY ERROR] {e}')
 
 
 def setup_gatt_and_advertising():
+    """GATT 서비스 및 광고 설정"""
     global _notify_char
 
     adapter = peripheral.adapter.Adapter()
@@ -258,38 +322,42 @@ def setup_gatt_and_advertising():
 
     advert = peripheral.advertisement.Advertisement(1, 'peripheral')
     advert.local_name = DEVICE_NAME
-    advert.service_UUIDs = [SERVICE_UUID]
+    advert.service_uuids = [SERVICE_UUID]
 
     ad_manager = peripheral.advertisement.AdvertisingManager(adapter.address)
     ad_manager.register_advertisement(advert, {})
 
-    print(f'[GATT] Advertising as "{DEVICE_NAME}"')
-
+    print(f'[GATT] 📡 Advertising as "{DEVICE_NAME}"')
+    
     threading.Thread(target=lambda: app.start(), daemon=True).start()
-
     return ad_manager, advert, gatt_manager, app
 
 
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
+    """MQTT 연결 성공 - App Sub 토픽 구독"""
     if reason_code == 0:
-        print(f'[MQTT] Connected')
+        print(f'[MQTT] ✅ Connected to {MQTT_BROKER}:{MQTT_PORT}')
+        
         topics = [
-            "ambient/status/#",
-            "ambient/ai/gesture-detected",
-            "ambient/ai/face-detected",
-            "ambient/ai/face-position",
+            "ambient/status/speed",
+            "ambient/status/tracking", 
             "ambient/user/embedding-ready",
-            "ambient/user/session-start",
-            "ambient/user/session-end",
             "ambient/db/stats-response",
         ]
+        
         for topic in topics:
             client.subscribe(topic)
+            print(f'[MQTT] 📬 Subscribed to {topic}')
+    else:
+        print(f'[MQTT] ❌ Connection failed: {reason_code}')
 
 
 def on_mqtt_message(client, userdata, msg):
+    """MQTT 메시지 수신 - App Sub 토픽에서 BLE Notification으로 전달"""
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
+        print(f'[MQTT] 📥 Received on {msg.topic}: {payload}')
+        
         send_notification({
             "type": "STATUS_UPDATE",
             "topic": msg.topic,
@@ -297,22 +365,24 @@ def on_mqtt_message(client, userdata, msg):
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
-        print(f'[ERROR] {e}')
+        print(f'[ERROR] MQTT message error: {e}')
 
 
 def setup_mqtt():
+    """MQTT 클라이언트 설정"""
     global _mqtt_client
-
+    
     _mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     _mqtt_client.on_connect = on_mqtt_connect
     _mqtt_client.on_message = on_mqtt_message
-
+    
     _mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
     _mqtt_client.loop_start()
     return True
 
 
 def signal_handler(sig, frame):
+    """종료 시그널 핸들러"""
     print('\n[EXIT] Shutting down...')
     if _mqtt_client:
         _mqtt_client.loop_stop()
@@ -324,6 +394,7 @@ def main():
     print('=' * 60)
     print('BLE Gateway Service')
     print('=' * 60)
+    print(f'Device Name: {DEVICE_NAME}')
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -332,12 +403,10 @@ def main():
     agent = register_pairing_agent()
     ad_mgr, advert, gatt_mgr, app = setup_gatt_and_advertising()
 
-    print('\n[INFO] BLE Gateway running!')
-
     try:
         GLib.MainLoop().run()
     except KeyboardInterrupt:
-        print('\n[EXIT] Shutting down...')
+        print('\n[EXIT] User interrupt')
 
 
 if __name__ == '__main__':
