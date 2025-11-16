@@ -25,14 +25,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 소스 코드 복사
-COPY main.py .
+COPY ai_service.py .
 COPY facenet.tflite /app/
 
 # 권한 설정
-RUN chmod +x main.py
+RUN chmod +x ai_service.py
 
 # 환경변수 설정
 ENV PYTHONUNBUFFERED=1
 
 # 실행 (헤드리스 모드)
-CMD ["python3", "main.py", "--headless"]
+CMD ["python3", "ai_service.py", "--headless"]
