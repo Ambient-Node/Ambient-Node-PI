@@ -1,0 +1,4 @@
+.env
+
+BLE_gateway/.venv
+init.sql/

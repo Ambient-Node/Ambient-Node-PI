@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-AI Service - Face Recognition & Tracking
+AI Service - Face Recognition & Tracking with Manual Override Support
 - MQTT 기반 사용자 선택 관리
 - 얼굴 인식 및 위치 추적
-- Fan Service 연동
+- 수동 조작 우선순위 처리 (얼굴 추적 일시 중단/재개)
+- DB Service 연동
 """
 
 import cv2
@@ -67,6 +68,7 @@ PROCESSING_HEIGHT = 360
 MQTT_SEND_INTERVAL = 0.25
 FACE_IDENTIFICATION_INTERVAL = 1.0
 MIN_FACE_SIZE = 800
+FACE_LOST_GRACE_PERIOD = 5.0  # 얼굴 손실 grace period (초)
 
 mp_face_detection = mp.solutions.face_detection
 
@@ -85,12 +87,138 @@ TOPIC_USER_SELECT = "ambient/user/select"
 TOPIC_USER_DESELECT = "ambient/user/deselect"
 TOPIC_USER_EMBEDDING_READY = "ambient/user/embedding-ready"
 TOPIC_USER_REGISTER = "ambient/user/register"
+TOPIC_CONTROL_MANUAL = "ambient/control/manual"
+TOPIC_DB_LOG_EVENT = "ambient/db/log-event"
 
 # 선택된 사용자 관리
-selected_users = []  # 선택된 사용자 리스트 (BLE Gateway로부터 수신)
+selected_users = []  # 선택된 사용자 리스트
 selected_user_lock = threading.Lock()
 
+# 세션 관리
+current_session_id = None
+session_lock = threading.Lock()
+
+# -----------------------
+# Face Tracking 상태 관리
+# -----------------------
+class FaceTrackingState:
+    """얼굴 추적 상태 관리 클래스"""
+    def __init__(self):
+        self.state = 'idle'  # 'idle', 'tracking', 'paused'
+        self.current_user_id = None
+        self.current_event_id = None
+        self.paused_at = None
+        self.last_detection = {}  # {user_id: timestamp}
+        self.lock = threading.Lock()
+    
+    def is_tracking(self):
+        with self.lock:
+            return self.state == 'tracking'
+    
+    def is_paused(self):
+        with self.lock:
+            return self.state == 'paused'
+    
+    def start_tracking(self, user_id, position, session_id):
+        """얼굴 추적 시작"""
+        with self.lock:
+            self.state = 'tracking'
+            self.current_user_id = user_id
+            self.current_event_id = int(time.time() * 1000)  # 임시 ID
+            self.last_detection[user_id] = time.time()
+        
+        # MQTT 발행
+        timestamp = datetime.now().isoformat()
+        event = {
+            "event_type": "face_tracking_start",
+            "session_id": session_id,
+            "user_id": user_id,
+            "face_position_x": position[0] / DISPLAY_WIDTH,
+            "face_position_y": position[1] / DISPLAY_HEIGHT,
+            "timestamp": timestamp
+        }
+        client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+        print(f"[TRACKING] Started for user {user_id}")
+    
+    def end_tracking(self, reason):
+        """얼굴 추적 종료"""
+        with self.lock:
+            if not self.current_event_id:
+                return
+            
+            event_id = self.current_event_id
+            user_id = self.current_user_id
+            self.state = 'idle'
+            self.current_event_id = None
+            self.current_user_id = None
+        
+        # MQTT 발행
+        timestamp = datetime.now().isoformat()
+        event = {
+            "event_type": "face_tracking_end",
+            "event_id": event_id,
+            "user_id": user_id,
+            "end_reason": reason,
+            "timestamp": timestamp
+        }
+        client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+        print(f"[TRACKING] Ended for user {user_id}: {reason}")
+    
+    def pause_tracking(self):
+        """얼굴 추적 일시 중단 (수동 조작 시)"""
+        with self.lock:
+            if self.state != 'tracking':
+                return
+            self.state = 'paused'
+            self.paused_at = time.time()
+        print(f"[TRACKING] Paused for manual override")
+    
+    def resume_tracking(self):
+        """얼굴 추적 재개"""
+        with self.lock:
+            if self.state != 'paused':
+                return
+            paused_duration = int(time.time() - self.paused_at)
+            self.state = 'tracking'
+            self.paused_at = None
+        
+        # MQTT 발행
+        timestamp = datetime.now().isoformat()
+        event = {
+            "event_type": "face_tracking_resume",
+            "event_id": self.current_event_id,
+            "session_id": current_session_id,
+            "user_id": self.current_user_id,
+            "paused_duration_seconds": paused_duration,
+            "timestamp": timestamp
+        }
+        client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+        print(f"[TRACKING] Resumed after {paused_duration}s")
+    
+    def update_detection(self, user_id):
+        """얼굴 감지 업데이트"""
+        with self.lock:
+            self.last_detection[user_id] = time.time()
+    
+    def check_face_lost(self, user_id):
+        """얼굴 손실 확인 (grace period 기준)"""
+        with self.lock:
+            if user_id not in self.last_detection:
+                return True
+            elapsed = time.time() - self.last_detection[user_id]
+            return elapsed > FACE_LOST_GRACE_PERIOD
+    
+    def get_current_user(self):
+        """현재 추적 중인 사용자 반환"""
+        with self.lock:
+            return self.current_user_id
+
+# Face Tracking 상태 인스턴스
+tracking_state = FaceTrackingState()
+
+# -----------------------
 # MQTT 클라이언트 설정
+# -----------------------
 client = mqtt.Client(client_id="ai-service")
 
 def on_mqtt_connect(client, userdata, flags, rc):
@@ -101,13 +229,15 @@ def on_mqtt_connect(client, userdata, flags, rc):
         client.subscribe(TOPIC_USER_SELECT)
         client.subscribe(TOPIC_USER_DESELECT)
         client.subscribe(TOPIC_USER_REGISTER)
-        print(f"[MQTT] Subscribed to: {TOPIC_USER_SELECT}, {TOPIC_USER_DESELECT}, {TOPIC_USER_REGISTER}")
+        client.subscribe(TOPIC_CONTROL_MANUAL)
+        print(f"[MQTT] Subscribed to: {TOPIC_USER_SELECT}, {TOPIC_USER_DESELECT}, "
+              f"{TOPIC_USER_REGISTER}, {TOPIC_CONTROL_MANUAL}")
     else:
         print(f"[ERROR] MQTT connection failed: {rc}")
 
 def on_mqtt_message(client, userdata, msg):
     """MQTT 메시지 수신 처리"""
-    global selected_users
+    global selected_users, current_session_id
     
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
@@ -115,24 +245,91 @@ def on_mqtt_message(client, userdata, msg):
         if msg.topic == TOPIC_USER_SELECT:
             # 사용자 선택
             user_list = payload.get('user_list', [])
+            session_id = payload.get('session_id')
+            
             with selected_user_lock:
                 selected_users = [user['user_id'] for user in user_list if 'user_id' in user]
-            print(f"[MQTT] Selected users: {selected_users}")
+            
+            with session_lock:
+                current_session_id = session_id
+            
+            print(f"[MQTT] Selected users: {selected_users} (Session: {session_id})")
         
         elif msg.topic == TOPIC_USER_DESELECT:
             # 사용자 선택 해제
             with selected_user_lock:
                 selected_users = []
+            
+            # 추적 중이면 종료
+            if tracking_state.is_tracking():
+                tracking_state.end_tracking('session_ended')
+            
             print(f"[MQTT] All users deselected")
         
         elif msg.topic == TOPIC_USER_REGISTER:
             # 사용자 등록 (이미지 저장 및 임베딩 생성)
             handle_user_registration(payload)
+        
+        elif msg.topic == TOPIC_CONTROL_MANUAL:
+            # 수동 조작 시작/종료
+            action = payload.get('action')
+            if action == 'start':
+                handle_manual_override_start(payload)
+            elif action == 'end':
+                handle_manual_override_end(payload)
     
     except json.JSONDecodeError as e:
         print(f"[ERROR] Failed to parse JSON: {e}")
     except Exception as e:
         print(f"[ERROR] MQTT message processing error: {e}")
+
+def handle_manual_override_start(payload):
+    """수동 조작 시작 처리 - 얼굴 추적 일시 중단"""
+    if not tracking_state.is_tracking():
+        return
+    
+    rotation_angle = payload.get('rotation_angle', 0)
+    user_id = payload.get('user_id')
+    
+    # 추적 중단
+    tracking_state.pause_tracking()
+    
+    # DB에 수동 조작 이벤트 기록
+    timestamp = datetime.now().isoformat()
+    event = {
+        "event_type": "manual_override_start",
+        "session_id": current_session_id,
+        "user_id": user_id,
+        "interrupted_tracking_event_id": tracking_state.current_event_id,
+        "rotation_angle": rotation_angle,
+        "timestamp": timestamp
+    }
+    client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+    print(f"[MANUAL] Override started - tracking paused")
+
+def handle_manual_override_end(payload):
+    """수동 조작 종료 처리 - 얼굴 추적 재개"""
+    if not tracking_state.is_paused():
+        return
+    
+    override_id = payload.get('override_id')
+    duration = payload.get('duration_seconds', 0)
+    
+    # 추적 재개
+    tracking_state.resume_tracking()
+    
+    # DB에 수동 조작 종료 이벤트 기록
+    timestamp = datetime.now().isoformat()
+    event = {
+        "event_type": "manual_override_end",
+        "override_id": override_id,
+        "session_id": current_session_id,
+        "user_id": payload.get('user_id'),
+        "duration_seconds": duration,
+        "timestamp": timestamp
+    }
+    client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+    print(f"[MANUAL] Override ended - tracking resumed")
 
 def handle_user_registration(payload):
     """사용자 등록 처리 - 이미지 저장 및 임베딩 생성"""
@@ -158,8 +355,6 @@ def handle_user_registration(payload):
                 print(f"[ERROR] Failed to load image: {image_path}")
                 return
             
-            # 얼굴 영역 감지
-            h, w, _ = img.shape
             # 임베딩 생성
             embedding = get_embedding(img)
             
@@ -196,7 +391,9 @@ try:
 except Exception as e:
     print(f"[ERROR] MQTT connection failed: {e}")
 
-# 프레임 큐
+# -----------------------
+# 프레임 처리 및 카메라 스트림
+# -----------------------
 frame_queue = deque(maxlen=1)
 queue_lock = threading.Lock()
 
@@ -263,6 +460,9 @@ def tcp_receiver():
             break
     sock.close()
 
+# -----------------------
+# 얼굴 인식 모델 로드
+# -----------------------
 def cosine_similarity(a, b):
     if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
         return 0
@@ -270,7 +470,8 @@ def cosine_similarity(a, b):
 
 # TFLite 모델 로드
 print("[INFO] Loading TFLite model...")
-interpreter = Interpreter(model_path="/home/pi/projects/face/facenet.tflite")
+MODEL_PATH = os.getenv('TFLITE_MODEL_PATH', '/app/facenet.tflite')
+interpreter = Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
@@ -307,9 +508,43 @@ def get_embedding(face_img):
     embedding = interpreter.get_tensor(output_details[0]['index'])[0]
     return embedding
 
+# -----------------------
+# Face Lost 모니터링 쓰레드
+# -----------------------
+def face_lost_monitor():
+    """주기적으로 얼굴 손실 체크"""
+    while True:
+        time.sleep(1)
+        
+        if not tracking_state.is_tracking():
+            continue
+        
+        current_user = tracking_state.get_current_user()
+        if current_user and tracking_state.check_face_lost(current_user):
+            # Grace period 초과 - 얼굴 손실
+            timestamp = datetime.now().isoformat()
+            event = {
+                "event_type": "face_lost",
+                "event_id": tracking_state.current_event_id,
+                "user_id": current_user,
+                "timestamp": timestamp
+            }
+            client.publish(TOPIC_DB_LOG_EVENT, json.dumps(event))
+            print(f"[TRACKING] Face lost for user {current_user}")
+            
+            # 추적 종료
+            tracking_state.end_tracking('face_lost')
+
+# Face Lost 모니터링 쓰레드 시작
+face_lost_thread = threading.Thread(target=face_lost_monitor, daemon=True)
+face_lost_thread.start()
+
+# -----------------------
+# 메인 루프
+# -----------------------
 # rpicam-vid 스트림 시작
-rpicam_process = start_rpicam_stream()
-time.sleep(2)
+# rpicam_process = start_rpicam_stream()
+# time.sleep(2)
 
 # TCP 수신 스레드 시작
 tcp_thread = threading.Thread(target=tcp_receiver, daemon=True)
@@ -478,7 +713,7 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                 
                 last_identification_time = current_time
 
-            # 4. 선택된 사용자 필터링
+            # 4. 선택된 사용자 필터링 및 추적 상태 관리
             with selected_user_lock:
                 selected_face_centers = []
                 selected_face_infos = []
@@ -488,6 +723,10 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                     if (face_info["user_id"] in selected_users and 
                         face_info["name"] != "Unknown" and 
                         face_info["name"] != "Unidentified"):
+                        
+                        # 얼굴 감지 업데이트
+                        tracking_state.update_detection(face_info["user_id"])
+                        
                         selected_face_centers.append(face_info["center"])
                         selected_face_infos.append({
                             "user_id": face_info["user_id"],
@@ -497,6 +736,32 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                             "y": face_info["center"][1],
                             "bbox": face_info["bbox_fhd"]
                         })
+                
+                # 추적 상태 전환 로직
+                if selected_face_infos and not tracking_state.is_paused():
+                    # 선택된 얼굴이 있고 수동 조작 중이 아님
+                    if not tracking_state.is_tracking():
+                        # 추적 시작
+                        first_user = selected_face_infos[0]
+                        tracking_state.start_tracking(
+                            first_user["user_id"],
+                            (first_user["x"], first_user["y"]),
+                            current_session_id
+                        )
+                    else:
+                        # 사용자 전환 체크
+                        current_user = tracking_state.get_current_user()
+                        detected_users = [f["user_id"] for f in selected_face_infos]
+                        
+                        if current_user not in detected_users:
+                            # 다른 사용자로 전환
+                            tracking_state.end_tracking('switched_user')
+                            next_user = selected_face_infos[0]
+                            tracking_state.start_tracking(
+                                next_user["user_id"],
+                                (next_user["x"], next_user["y"]),
+                                current_session_id
+                            )
 
             # 화면 표시
             if not HEADLESS_MODE:
@@ -504,24 +769,35 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                     x_min, y_min, box_width, box_height = face_info["bbox_fhd"]
                     center_x, center_y = face_info["center"]
                     
-                    # 선택된 사용자는 초록색, 나머지는 주황색
-                    if face_info["user_id"] in selected_users:
-                        color = (0, 255, 0)  # 초록색
-                        label = f"{face_info['name']} (Selected) {face_info['confidence']*100:.1f}%"
+                    # 추적 상태에 따른 색상
+                    if tracking_state.is_paused():
+                        status_color = (128, 128, 128)  # 회색 (일시 중단)
+                        status_text = "PAUSED"
+                    elif face_info["user_id"] in selected_users:
+                        if tracking_state.get_current_user() == face_info["user_id"]:
+                            status_color = (0, 255, 0)  # 초록색 (추적 중)
+                            status_text = "TRACKING"
+                        else:
+                            status_color = (0, 255, 255)  # 노란색 (선택됨)
+                            status_text = "SELECTED"
                     elif face_info["name"] == "Unidentified":
                         continue
                     elif face_info["name"] == "Unknown":
-                        color = (0, 165, 255)  # 주황색
-                        label = "Unknown"
+                        status_color = (0, 165, 255)  # 주황색
+                        status_text = "UNKNOWN"
                     else:
-                        color = (255, 255, 0)  # 노란색
-                        label = f"{face_info['name']} ({face_info['confidence']*100:.1f}%)"
+                        status_color = (255, 255, 0)  # 청록색
+                        status_text = "DETECTED"
                     
-                    cv2.rectangle(frame_display, (x_min, y_min), (x_min+box_width, y_min+box_height), color, 3)
+                    label = f"{face_info['name']} ({status_text}) {face_info['confidence']*100:.1f}%"
+                    
+                    cv2.rectangle(frame_display, (x_min, y_min), (x_min+box_width, y_min+box_height), status_color, 3)
                     cv2.circle(frame_display, (center_x, center_y), 8, (0, 0, 255), -1)
-                    cv2.putText(frame_display, label, (x_min, y_min-15), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+                    cv2.putText(frame_display, label, (x_min, y_min-15), cv2.FONT_HERSHEY_SIMPLEX, 1.0, status_color, 2)
 
-                status_text = f"FPS: {fps:.1f} | Tracked: {len(tracked_faces)} | Selected: {len(selected_face_infos)}"
+                # 추적 상태 표시
+                tracking_status = "TRACKING" if tracking_state.is_tracking() else ("PAUSED" if tracking_state.is_paused() else "IDLE")
+                status_text = f"FPS: {fps:.1f} | Tracked: {len(tracked_faces)} | Selected: {len(selected_face_infos)} | State: {tracking_status}"
                 cv2.putText(frame_display, status_text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
                 cv2.imshow(window_name, frame_display)
                 key = cv2.waitKey(1) & 0xFF
@@ -529,8 +805,11 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                 if key == ord('q'):
                     break
 
-            # MQTT 위치 전송 (선택된 얼굴만)
-            if time.time() - last_send_time >= MQTT_SEND_INTERVAL and selected_face_centers:
+            # MQTT 위치 전송 (선택된 얼굴만, 추적 중일 때만)
+            if (time.time() - last_send_time >= MQTT_SEND_INTERVAL and 
+                selected_face_centers and 
+                tracking_state.is_tracking()):
+                
                 timestamp = datetime.now().isoformat()
                 
                 # 얼굴 위치 정보 발행

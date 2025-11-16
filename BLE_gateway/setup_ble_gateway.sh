@@ -20,8 +20,8 @@ sudo apt install -y \
     bluetooth \
     bluez
 
-# 2. 가상환경 설치
-sudo python3 -m venv --system-site-packages .venv
+# 2. 가상환경 설치 python version 3.11.2여야 dbus 실행할 수 있음.
+sudo python3.11 -m venv --system-site-packages .venv
 source .venv/bin/activate
 
 # 2. Python 패키지 설치
@@ -44,39 +44,39 @@ discoverable on
 exit
 EOF
 
-# 4. systemd 서비스 설치
-echo ""
-echo "[4/5] systemd 서비스 설치 중..."
+# # 4. systemd 서비스 설치
+# echo ""
+# echo "[4/5] systemd 서비스 설치 중..."
 
-# systemd 리로드
-sudo systemctl daemon-reload
+# # systemd 리로드
+# sudo systemctl daemon-reload
 
-# 서비스 활성화 및 시작
-sudo systemctl enable ambient-ble-gateway.service
-sudo systemctl start ambient-ble-gateway.service
+# # 서비스 활성화 및 시작
+# sudo systemctl enable ambient-ble-gateway.service
+# sudo systemctl start ambient-ble-gateway.service
 
-# 5. 상태 확인
-echo ""
-echo "[5/5] 설치 완료!"
-echo ""
-echo "=========================================="
-echo "BLE Gateway 상태 확인"
-echo "=========================================="
-sudo systemctl status ambient-ble-gateway.service --no-pager
+# # 5. 상태 확인
+# echo ""
+# echo "[5/5] 설치 완료!"
+# echo ""
+# echo "=========================================="
+# echo "BLE Gateway 상태 확인"
+# echo "=========================================="
+# sudo systemctl status ambient-ble-gateway.service --no-pager
 
-echo ""
-echo "=========================================="
-echo "유용한 명령어"
-echo "=========================================="
-echo "서비스 상태 확인:  sudo systemctl status ambient-ble-gateway"
-echo "서비스 중지:       sudo systemctl stop ambient-ble-gateway"
-echo "서비스 시작:       sudo systemctl start ambient-ble-gateway"
-echo "서비스 재시작:     sudo systemctl restart ambient-ble-gateway"
-echo "로그 확인:         sudo journalctl -u ambient-ble-gateway -f  || sudo journalctl -u ambient-ble-gateway -o cat"
-echo "=========================================="
+# echo ""
+# echo "=========================================="
+# echo "유용한 명령어"
+# echo "=========================================="
+# echo "서비스 상태 확인:  sudo systemctl status ambient-ble-gateway"
+# echo "서비스 중지:       sudo systemctl stop ambient-ble-gateway"
+# echo "서비스 시작:       sudo systemctl start ambient-ble-gateway"
+# echo "서비스 재시작:     sudo systemctl restart ambient-ble-gateway"
+# echo "로그 확인:         sudo journalctl -u ambient-ble-gateway -f  || sudo journalctl -u ambient-ble-gateway -o cat"
+# echo "=========================================="
 
 
-# 사용자 폴더 생성을 위한 권한 설정
-ls -ld /var/lib/ambient-node /var/lib/ambient-node/users
-sudo chown -R $(whoami):$(whoami) /var/lib/ambient-node
-sudo chmod -R u+rwX /var/lib/ambient-node
+# # 사용자 폴더 생성을 위한 권한 설정
+# ls -ld /var/lib/ambient-node /var/lib/ambient-node/users
+# sudo chown -R $(whoami):$(whoami) /var/lib/ambient-node
+# sudo chmod -R u+rwX /var/lib/ambient-node

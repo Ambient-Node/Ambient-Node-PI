@@ -1,0 +1,16 @@
+[Unit]
+Description=Raspberry Pi Camera TCP Stream
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/rpicam-vid -t 0 --width 1920 --height 1080 --codec yuv420 --inline --listen -o tcp://0.0.0.0:8888 --nopreview
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
