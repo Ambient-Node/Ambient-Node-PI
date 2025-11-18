@@ -131,7 +131,7 @@ services:
   # AI Service
   # ============================================
   ai_service:
-    image: jiyuniverse/ambient-node-ai-service:arm64
+    image: jiyuniverse/ambient-node-ai-service:latest
     container_name: ambient-ai-service
     privileged: true
     network_mode: host
