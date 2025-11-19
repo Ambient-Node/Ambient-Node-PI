@@ -13,11 +13,13 @@ RUN apt-get update && apt-get install -y \
 
 # requirements.txt 복사 및 설치
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 소스 코드 복사
-COPY . .
+# 소스 복사
+COPY config.py database.py mqtt_client.py handlers.py main.py ./
+
+# 환경 변수
+ENV PYTHONUNBUFFERED=1
 
 # 컨테이너 시작 시 실행할 커맨드
-CMD ["python", "db_service.py"]
+CMD ["python3", "main.py"]

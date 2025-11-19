@@ -1,9 +1,4 @@
-"""MQTT 통신 관리"""
-import json
-import threading
-from datetime import datetime
-import paho.mqtt.client as mqtt
-
+# mqtt_client.py
 class MQTTClient:
     def __init__(self, broker, port):
         self.client = mqtt.Client(client_id="ai-service")
@@ -15,40 +10,50 @@ class MQTTClient:
         self.lock = threading.Lock()
         
         # 콜백
-        self.on_user_select = None
+        self.on_session_update = None
         
         self.client.connect(broker, port, 60)
         self.client.loop_start()
         print(f"[MQTT] Connected: {broker}:{port}")
     
     def _on_connect(self, client, userdata, flags, rc, properties=None):
-        client.subscribe("ambient/user/select")  # ← deselect 제거
-        print("[MQTT] Subscribed")
+        # ambient/session/active 구독 (DB Service가 발행)
+        client.subscribe("ambient/session/active")
+        print("[MQTT] Subscribed to session/active")
     
     def _on_message(self, client, userdata, msg):
         try:
             payload = json.loads(msg.payload.decode())
             
-            if msg.topic == "ambient/user/select":
-                user_list = payload.get('user_list', [])
+            if msg.topic == "ambient/session/active":
                 session_id = payload.get('session_id')
+                user_list = payload.get('user_list', [])
                 
                 with self.lock:
-                    self.selected_user_ids = [u['user_id'] for u in user_list]
                     self.current_session_id = session_id
+                    self.selected_user_ids = [u['user_id'] for u in user_list]
                 
-                print(f"[MQTT] Selected: {self.selected_user_ids}")
+                print(f"[MQTT] Session updated: {session_id}")
+                print(f"[MQTT] Tracking: {self.selected_user_ids}")
                 
-                if self.on_user_select:
-                    self.on_user_select(self.selected_user_ids, session_id)
+                if self.on_session_update:
+                    self.on_session_update(session_id, self.selected_user_ids)
         
         except Exception as e:
             print(f"[MQTT] Message error: {e}")
     
-    def publish_face_detected(self, session_id, user_id, confidence, x, y):
+    def publish_face_detected(self, user_id, confidence, x, y):
+        """얼굴 인식 이벤트"""
+        with self.lock:
+            session_id = self.current_session_id
+        
+        if not session_id:
+            print("[MQTT] No active session, skipping face_detected")
+            return
+        
         payload = {
             "event_type": "face_detected",
-            "session_id": session_id,
+            "session_id": session_id,  # ← DB Service가 보낸 session_id 사용
             "user_id": user_id,
             "confidence": round(confidence, 4),
             "x": int(x), "y": int(y),
@@ -56,7 +61,14 @@ class MQTTClient:
         }
         self.client.publish("ambient/ai/face-detected", json.dumps(payload))
     
-    def publish_face_position(self, session_id, user_id, x, y):
+    def publish_face_position(self, user_id, x, y):
+        """얼굴 좌표 추적"""
+        with self.lock:
+            session_id = self.current_session_id
+        
+        if not session_id:
+            return
+        
         payload = {
             "event_type": "face_position",
             "session_id": session_id,
@@ -66,16 +78,7 @@ class MQTTClient:
         }
         self.client.publish("ambient/ai/face-position", json.dumps(payload))
     
-    def publish_face_lost(self, session_id, user_id, duration):
-        payload = {
-            "event_type": "face_lost",
-            "session_id": session_id,
-            "user_id": user_id,
-            "duration_seconds": round(duration, 1),
-            "timestamp": datetime.now().isoformat()
-        }
-        self.client.publish("ambient/ai/face-lost", json.dumps(payload))
-    
     def get_current_session(self):
+        """현재 세션 정보 (스레드 안전)"""
         with self.lock:
             return self.current_session_id, self.selected_user_ids.copy()
