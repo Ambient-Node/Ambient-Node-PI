@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --extra-index-url https://www.piwheels.org/simple
 
 # 2) 코드 & 모델 복사
 COPY facenet.tflite /app/facenet.tflite
-COPY ai_service.py /app/ai_service.py
+COPY *.py /app/
 
 RUN mkdir -p /var/lib/ambient-node/users /var/lib/ambient-node/captures
 
@@ -33,4 +33,4 @@ ENV MQTT_BROKER=localhost
 ENV MQTT_PORT=1883
 ENV TFLITE_MODEL_PATH=/app/facenet.tflite
 
-CMD ["python3", "ai_service.py", "--headless"]
+CMD ["python3", "main.py"]

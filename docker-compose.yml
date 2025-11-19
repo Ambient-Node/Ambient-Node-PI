@@ -42,8 +42,8 @@ services:
       - /var/lib/ambient-node:/var/lib/ambient-node
       - ./fan-service:/app    # 소스코드 마운트 (개발 중)
     environment:
-      - MQTT_BROKER=mqtt_broker
-      - MQTT_PORT=1883
+      - MQTT_BROKER=${MQTT_BROKER}
+      - MQTT_PORT=${MQTT_PORT}
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED}
     networks:
       - ambient-network
@@ -131,7 +131,7 @@ services:
   # AI Service
   # ============================================
   ai_service:
-    image: jiyuniverse/ambient-node-ai-service:arm64
+    image: jiyuniverse/ambient-node-ai-service:latest
     container_name: ambient-ai-service
     privileged: true
     network_mode: host
@@ -148,7 +148,7 @@ services:
     depends_on:
       - mqtt_broker
     restart: unless-stopped
-    command: ["python3", "ai_service.py", "--headless"]
+    command: ["python3", "main.py"]
     logging:
       driver: "json-file"
       options:
