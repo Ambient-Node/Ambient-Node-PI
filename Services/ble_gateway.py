@@ -18,7 +18,7 @@ try:
     import dbus.service
     import dbus.mainloop.glib
     from gi.repository import GLib
-    from bluezero import peripheral
+    from bluezero import peripheral, adapter
     BLE_AVAILABLE = True
 except ImportError as e:
     print(f"[ERROR] BLE libraries not available: {e}")
@@ -521,7 +521,24 @@ def main():
     
     # BLE Peripheral 시작
     try:
-        app = peripheral.Peripheral(DEVICE_NAME, local_name=DEVICE_NAME)
+        adapters = list(adapter.Adapter.available())
+        if not adapters:
+            print("[BLE] ❌ No BLE adapter found")
+            send_notification({
+                "type": "ERROR",
+                "message": "No BLE adapter found",
+                "timestamp": datetime.now().isoformat()
+            })
+            return
+
+        adapter_addr = adapters[0].address
+        print(f"[BLE] ✅ Using adapter: {adapter_addr}")
+
+        app = peripheral.Peripheral(
+            adapter_addr=adapter_addr,
+            local_name=DEVICE_NAME
+        )
+
         app.add_service(srv_id=1, uuid=SERVICE_UUID, primary=True)
         
         # Write Characteristic

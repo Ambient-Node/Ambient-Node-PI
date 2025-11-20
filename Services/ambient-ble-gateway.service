@@ -5,8 +5,8 @@ After=network.target bluetooth.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/ambient-node/BLE_gateway
-ExecStart=/home/pi/ambient-node/BLE_gateway/.venv/bin/python3.11 /home/pi/ambient-node/BLE_gateway/ble_gateway.py
+WorkingDirectory=/home/pi/ambient-node/Services
+ExecStart=/home/pi/ambient-node/Services/.venv/bin/python3.11 /home/pi/ambient-node/Services/ble_gateway.py
 Restart=always
 RestartSec=10
 Environment="PYTHONUNBUFFERED=1"
