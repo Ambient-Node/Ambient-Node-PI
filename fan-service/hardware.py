@@ -56,16 +56,20 @@ class FanHardware:
             self.ser = None
 
     def set_fan_speed(self, speed: int):
-        """팬 속도 설정 (0~100), 0이면 OFF"""
+        """팬 속도 설정 (0~5), 0이면 OFF"""
         global _current_speed
 
-        speed = max(0, min(100, int(speed)))
+        # 0~5 범위
+        speed = max(0, min(5, int(speed)))
+
+        # UART로 그대로 보냄
         self._send_command(f"SPEED {speed}")
 
         _current_speed = speed
         power = speed > 0
-        print(f"[FAN] Speed: {speed}%, Power: {'ON' if power else 'OFF'}")
+        print(f"[FAN] Speed level: {speed}, Power: {'ON' if power else 'OFF'}")
         return power, speed
+
 
     def rotate_motor_2axis(self, axis: str, target_angle: int):
         """

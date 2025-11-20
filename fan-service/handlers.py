@@ -33,33 +33,20 @@ class FanHandlers:
         print(f"[CMD] 🎯 Command: {cmd}")
 
         if cmd == "speed":
-            """
-            BLE Gateway → MQTT: ambient/command/speed
-            payload 예시:
-            {
-              "event_type": "speed_change",
-              "speed": 0~5,
-              "timestamp": "..."
-            }
-            """
-            speed_level = payload.get("speed", 0)
+            # 항상 0~5 단계로만 받는다
+            raw = payload.get("speed", 0)
             try:
-                speed_level = int(speed_level)
+                level = int(raw)
             except Exception:
-                speed_level = 0
+                level = 0
 
-            # 0~5 → 0~100 매핑 (단계별로 명시)
-            SPEED_MAP = {
-                0: 0,    # OFF
-                1: 20,   # 약
-                2: 40,   # 중약
-                3: 60,   # 중
-                4: 80,   # 중강
-                5: 100,  # 강
-            }
-            level = SPEED_MAP.get(speed_level, 0)
+            # 0~5 범위로 클램핑
+            level = max(0, min(5, level))
+
+            print(f"[CMD] ✅ Fan level (0~5): {level}")
             self.set_fan_speed(level)
-
+            return
+        
         elif cmd == "angle":
             """
             BLE Gateway / AI → MQTT: ambient/command/angle
