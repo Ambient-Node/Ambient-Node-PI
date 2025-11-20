@@ -1,105 +1,99 @@
 # hardware.py
-import time
 
-try:
-    import RPi.GPIO as GPIO
-    GPIO_AVAILABLE = True
-except (ImportError, RuntimeError) as e:
-    print(f"[WARN] GPIO not available: {e}")
-    GPIO_AVAILABLE = False
-    GPIO = None
+import time
+import serial  # pip install pyserial
 
 _current_speed = 0
 _current_angle_h = 90
 _current_angle_v = 90
-_pwm = None
 
 class FanHardware:
+    """
+    Raspberry Pi ↔ Arduino 간 UART 어댑터.
+    GPIO 대신 직렬 포트로 명령을 보낸다.
+    """
+
     def __init__(self, config):
         self.config = config
-        if GPIO_AVAILABLE:
-            self._init_gpio()
-        else:
-            print("[GPIO] ⚠️ Running in simulation mode")
+        self.ser = None
+        self._connect_serial()
 
-    def _init_gpio(self):
-        global _pwm
-        GPIO.setwarnings(False)
-        GPIO.setmode(GPIO.BCM)
+    def _connect_serial(self):
+        """UART 포트 연결"""
         try:
-            GPIO.cleanup()
-        except Exception:
-            pass
+            self.ser = serial.Serial(
+                self.config.SERIAL_PORT,
+                self.config.SERIAL_BAUDRATE,
+                timeout=1
+            )
+            print(f"[UART] Connected to {self.config.SERIAL_PORT} @ {self.config.SERIAL_BAUDRATE}")
+            # 아두이노 리셋 시간 고려
+            time.sleep(2)
+        except Exception as e:
+            print(f"[UART] Serial connect failed: {e}")
+            self.ser = None
 
-        GPIO.setup(self.config.FAN_PWM_PIN, GPIO.OUT)
-        GPIO.setup(self.config.MOTOR_STEP_PIN_H, GPIO.OUT)
-        GPIO.setup(self.config.MOTOR_DIR_PIN_H, GPIO.OUT)
-        GPIO.setup(self.config.MOTOR_STEP_PIN_V, GPIO.OUT)
-        GPIO.setup(self.config.MOTOR_DIR_PIN_V, GPIO.OUT)
+    def _send_command(self, cmd: str):
+        """아두이노로 한 줄 명령 전송 (예: 'SPEED 60')"""
+        if not self.ser or not self.ser.is_open:
+            print("[UART] Serial not open, trying to reconnect...")
+            self._connect_serial()
+            if not self.ser:
+                print("[UART] Cannot send command, serial unavailable")
+                return
 
-        _pwm = GPIO.PWM(self.config.FAN_PWM_PIN, 1000)
-        _pwm.start(0)
-        print("[GPIO] ✅ Initialized")
+        try:
+            line = (cmd.strip() + "\n").encode("utf-8")
+            self.ser.write(line)
+            self.ser.flush()
+            print(f"[UART] ➡️ {cmd}")
+        except Exception as e:
+            print(f"[UART] Write failed: {e}")
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
 
     def set_fan_speed(self, speed: int):
         """팬 속도 설정 (0~100), 0이면 OFF"""
-        global _current_speed, _pwm
-        speed = max(0, min(100, int(speed)))
+        global _current_speed
 
-        if GPIO_AVAILABLE and _pwm:
-            _pwm.ChangeDutyCycle(speed)
+        speed = max(0, min(100, int(speed)))
+        self._send_command(f"SPEED {speed}")
 
         _current_speed = speed
         power = speed > 0
-        print(f"[FAN] 🌀 Speed: {speed}%, Power: {'ON' if power else 'OFF'}")
+        print(f"[FAN] Speed: {speed}%, Power: {'ON' if power else 'OFF'}")
         return power, speed
 
     def rotate_motor_2axis(self, axis: str, target_angle: int):
-        """2축 모터 제어 (0~180도)"""
+        """
+        2축 모터 제어 (0~180도)
+        axis: "horizontal" | "vertical"
+        """
         global _current_angle_h, _current_angle_v
 
         target_angle = max(0, min(180, int(target_angle)))
 
-        if not GPIO_AVAILABLE:
-            if axis == "horizontal":
-                _current_angle_h = target_angle
-            elif axis == "vertical":
-                _current_angle_v = target_angle
-            print(f"[MOTOR] 🔧 Simulated {axis} → {target_angle}°")
-            return
-
         if axis == "horizontal":
-            current = _current_angle_h
-            step_pin = self.config.MOTOR_STEP_PIN_H
-            dir_pin = self.config.MOTOR_DIR_PIN_H
-        elif axis == "vertical":
-            current = _current_angle_v
-            step_pin = self.config.MOTOR_STEP_PIN_V
-            dir_pin = self.config.MOTOR_DIR_PIN_V
-        else:
-            return
-
-        direction = 1 if target_angle > current else 0
-        GPIO.output(dir_pin, direction)
-        steps = abs(int((target_angle - current) * 10))  # 1도=10스텝 기준
-
-        for _ in range(steps):
-            GPIO.output(step_pin, GPIO.HIGH)
-            time.sleep(0.001)
-            GPIO.output(step_pin, GPIO.LOW)
-            time.sleep(0.001)
-
-        if axis == "horizontal":
+            axis_flag = "H"
             _current_angle_h = target_angle
-        else:
+        elif axis == "vertical":
+            axis_flag = "V"
             _current_angle_v = target_angle
+        else:
+            print(f"[MOTOR] Unknown axis: {axis}")
+            return
 
-        print(f"[MOTOR] ✅ {axis.capitalize()} → {target_angle}°")
+        self._send_command(f"ANGLE {axis_flag} {target_angle}")
+        print(f"[MOTOR] {axis.capitalize()} → {target_angle}°")
 
     def cleanup(self):
-        global _pwm
-        print("[HARDWARE] 🧹 Cleaning up GPIO...")
-        if GPIO_AVAILABLE:
-            if _pwm:
-                _pwm.stop()
-            GPIO.cleanup()
+        print("[HARDWARE] Cleaning up UART...")
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            print("[UART] 🔌 Disconnected")

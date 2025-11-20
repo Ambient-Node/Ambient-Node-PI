@@ -11,7 +11,6 @@ class FaceRecognizer:
         self.known_embeddings = []
         self.known_user_ids = []
         
-        # TFLite 모델
         self.interpreter = Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()
@@ -19,10 +18,11 @@ class FaceRecognizer:
         self.input_shape = self.input_details[0]['shape'][1:3]
         
         print(f"[FaceRec] Model loaded: {model_path}")
+        print(f"[FaceRec] Input shape: {self.input_shape}")
         self.load_known_faces()
     
     def load_known_faces(self):
-        """등록된 사용자 임베딩 로드"""
+        """등록된 사용자 임베딩 로드 (재로드 가능)"""
         self.known_embeddings = []
         self.known_user_ids = []
         
@@ -45,7 +45,7 @@ class FaceRecognizer:
                     print(f"[FaceRec] Load error {user_id}: {e}")
         
         print(f"[FaceRec] Loaded {len(self.known_user_ids)} users")
-    
+
     def get_embedding(self, face_img):
         """얼굴 이미지 → 임베딩"""
         img = cv2.resize(face_img, tuple(self.input_shape))
@@ -70,6 +70,11 @@ class FaceRecognizer:
         if best_sim > self.threshold:
             return self.known_user_ids[best_idx], best_sim
         return None, 0.0
+    
+    def reload_embeddings(self):
+        """새 사용자 등록 시 임베딩 재로드"""
+        print("[FaceRec] Reloading embeddings...")
+        self.load_known_faces()
     
     @staticmethod
     def _cosine_sim(a, b):
