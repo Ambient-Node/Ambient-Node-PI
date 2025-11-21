@@ -273,41 +273,6 @@ class EventHandlers:
         ))
         print(f"[Handler] Face lost: {user_id}")
 
-    # def handle_stats_request(self, payload):
-    #     """통계 요청"""
-    #     stat_type = payload.get('type', 'usage')
-    #     period = payload.get('period', 'day')
-
-    #     if stat_type == 'usage' and period == 'day':
-    #         # 오늘 시간대별 사용량
-    #         query = """
-    #         SELECT
-    #             date_trunc('hour', session_start) AS hour,
-    #             SUM(
-    #                 EXTRACT(EPOCH FROM
-    #                     COALESCE(session_end, CURRENT_TIMESTAMP) - session_start
-    #                 ) / 60
-    #             ) AS usage_minutes
-    #         FROM user_sessions
-    #         WHERE DATE(session_start) = CURRENT_DATE
-    #         GROUP BY hour
-    #         ORDER BY hour
-    #         """
-    #         self.db.execute(query)
-    #         results = self.db.fetchall()
-
-    #         data = [
-    #             {"hour": str(row['hour']), "minutes": row['usage_minutes']}
-    #             for row in results
-    #         ]
-
-    #         self.mqtt.publish("ambient/stats/response", {
-    #             "type": "usage",
-    #             "period": "day",
-    #             "data": data,
-    #             "timestamp": datetime.now().isoformat()
-    #         })
-    #         print(f"[Handler] Stats sent: {len(data)} records")
     def handle_stats_request(self, payload):
         """통계 요청"""
         stat_type = payload.get('type', 'usage')

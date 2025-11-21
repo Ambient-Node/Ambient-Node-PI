@@ -12,9 +12,8 @@ class FanHandlers:
     def handle_mqtt_message(self, topic: str, payload: dict):
         print(f"[MQTT] 📥 {topic}: {payload}")
 
-        if topic == "ambient/ai/face-detected":
-            # (지금은 angle_h / angle_v가 없으니 사실상 로그만 남음)
-            self.handle_face_detected(payload)
+        if topic == "ambient/ai/face-position":
+            self.handle_face_position(payload)
 
         elif topic.startswith("ambient/command/"):
             cmd = topic.split("/")[-1]   # speed / angle / mode
@@ -144,27 +143,24 @@ class FanHandlers:
     # --------------------------------------------------
     # AI 얼굴 이벤트 (향후 확장용)
     # --------------------------------------------------
-    def handle_face_detected(self, payload: dict):
+    def handle_face_position(self, payload: dict):
         """
-        AI Service → MQTT: ambient/ai/face-detected
+        AI Service → MQTT: ambient/ai/face-position
         현재 페이로드:
         {
-          "event_type": "face_detected",
+          "event_type": "face_position",
           "session_id": "...",
           "user_id": "user_001",
-          "confidence": 0.87,
           "x": 1024,
           "y": 320,
           "timestamp": "..."
         }
 
-        지금은 각도 정보가 없으니, 단순 로그만 남기고 동작은 하지 않는다.
-        나중에 AI가 angle_h/angle_v를 넣어주면 여기서 사용.
         """
         user_id = payload.get("user_id")
         x = payload.get("x")
         y = payload.get("y")
-        print(f"[FACE] 👤 Detected user={user_id}, pos=({x}, {y})")
+        print(f"[FACE] {user_id}: ({x}, {y})")
         # 향후: x,y → angle_h, angle_v 계산해서 rotate_motor_2axis 호출 가능
 
     # --------------------------------------------------

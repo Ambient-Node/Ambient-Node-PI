@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   # ============================================
@@ -33,11 +32,12 @@ services:
   # Fan Service
   # ============================================
   fan_service:
-    image: jiyuniverse/ambient-node-fan-service:arm64
+    image: jiyuniverse/ambient-node-fan-service:latest
     container_name: ambient-fan-service
     privileged: true
     devices:
       - /dev/ttyAMA0:/dev/ttyAMA0
+      - /dev/serial0:/dev/serial0
     volumes:
       - /var/lib/ambient-node:/var/lib/ambient-node
       - ./fan-service:/app    # 소스코드 마운트 (개발 중)
@@ -96,7 +96,7 @@ services:
   # DB Service
   # ============================================
   db_service:
-    image: jiyuniverse/ambient-node-db-service:arm64
+    image: jiyuniverse/ambient-node-db-service:latest
     container_name: ambient-db-service
     volumes:
       - /var/lib/ambient-node:/var/lib/ambient-node

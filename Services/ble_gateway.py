@@ -45,38 +45,13 @@ _notify_char = None
 _mqtt_client = None
 _agent_path = '/ambient/agent'
 
-# 청크 수신 버퍼 (개선: 타임아웃 추가)
-_chunk_buffer = {}  # {chunk_id: {"data": [], "total": N, "timestamp": ...}}
-_chunk_timeout = 30  # 초
+# 청크 수신 버퍼 (단순 방식)
+_chunk_buffer = []
+_chunk_total = 0
 
 # 이미지 저장 경로
 USER_IMAGES_DIR = "/var/lib/ambient-node/users"
 
-# ========================================
-# 청크 타임아웃 관리
-# ========================================
-def cleanup_expired_chunks():
-    """30초 이상 완료 안 된 청크 제거"""
-    global _chunk_buffer
-    current_time = time.time()
-    expired = []
-    
-    for chunk_id, info in _chunk_buffer.items():
-        if current_time - info.get("timestamp", 0) > _chunk_timeout:
-            expired.append(chunk_id)
-    
-    for chunk_id in expired:
-        print(f"[BLE] ⚠️ Chunk {chunk_id} expired, removing")
-        del _chunk_buffer[chunk_id]
-
-def periodic_cleanup():
-    """주기적 청크 정리"""
-    while True:
-        time.sleep(10)
-        cleanup_expired_chunks()
-
-# 정리 스레드 시작
-threading.Thread(target=periodic_cleanup, daemon=True).start()
 
 # ========================================
 # Pairing Agent
@@ -103,6 +78,7 @@ class PairingAgent(dbus.service.Object):
     def Cancel(self):
         print('[AGENT] Pairing canceled')
 
+
 def register_pairing_agent():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
@@ -115,6 +91,7 @@ def register_pairing_agent():
     manager.RequestDefaultAgent(_agent_path)
     print(f'[AGENT] Registered as NoInputNoOutput')
     return agent
+
 
 # ========================================
 # 이미지 저장 (개선: 유효성 검증)
@@ -153,15 +130,35 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
         print(f"[IMAGE] Save failed: {e}")
         return ""
 
+
 # ========================================
 # MQTT 메시지 수신 (응답 처리)
 # ========================================
+def on_mqtt_connect(client, userdata, flags, reason_code, properties):
+    """MQTT 연결 성공"""
+    if reason_code == 0:
+        print(f'[MQTT] ✅ Connected to {MQTT_BROKER}:{MQTT_PORT}')
+        
+        topics = [
+            "ambient/user/register-ack",
+            "ambient/session/active",
+            "ambient/stats/response",
+            "ambient/ai/face-detected",
+            "ambient/ai/face-lost",
+        ]
+        
+        for topic in topics:
+            client.subscribe(topic)
+            print(f'[MQTT] 📬 Subscribed to {topic}')
+    else:
+        print(f'[MQTT] ❌ Connection failed: {reason_code}')
+
+
 def on_mqtt_message(client, userdata, msg):
     """MQTT 메시지 수신 → BLE Notify"""
-    global _notify_char
-    
     try:
         payload = json.loads(msg.payload.decode())
+        print(f'[MQTT] 📥 Received on {msg.topic}')
         
         # 토픽별 처리
         if msg.topic == "ambient/user/register-ack":
@@ -207,6 +204,7 @@ def on_mqtt_message(client, userdata, msg):
     except Exception as e:
         print(f"[MQTT] ❌ Message error: {e}")
 
+
 # ========================================
 # BLE Notify 전송
 # ========================================
@@ -220,6 +218,7 @@ def send_notification(data: dict):
             print(f"[BLE] 📤 Notify sent: {data.get('type')}")
         except Exception as e:
             print(f"[BLE] ❌ Notify error: {e}")
+
 
 # ========================================
 # 완전한 데이터 처리 (핵심 로직)
@@ -257,7 +256,7 @@ def process_complete_data(data_str):
         image_path = ""
         if base64_img:
             user_dir = os.path.join(USER_IMAGES_DIR, user_id)
-            filename = "face_001.png"
+            filename = f"{user_id}.png"
             image_path = save_base64_image_to_png(base64_img, user_dir, filename)
             
             if not image_path:
@@ -279,13 +278,11 @@ def process_complete_data(data_str):
         print(f'[BLE] 🔐 사용자 등록: {username} ({user_id})')
 
     # ========================================
-    # 2. 사용자 선택 (user_select) - 수정됨!
+    # 2. 사용자 선택 (user_select)
     # ========================================
     elif action == 'user_select':
-        # ✅ Flutter에서 'users' 필드로 전송
         user_list = payload.get('users', [])
         
-        # 필드명 검증
         if not isinstance(user_list, list):
             send_notification({
                 "type": "ERROR",
@@ -297,7 +294,7 @@ def process_complete_data(data_str):
         topic = "ambient/user/select"
         mqtt_payload = {
             "event_type": "user_select",
-            "user_list": user_list,  # ✅ MQTT에서는 'user_list'로 통일
+            "user_list": user_list,
             "timestamp": timestamp
         }
         
@@ -308,25 +305,11 @@ def process_complete_data(data_str):
             print(f'[BLE] 👥 사용자 선택: {", ".join(usernames)} ({len(user_list)}명)')
 
     # ========================================
-    # 3. 사용자 정보 수정 (user_update)
-    # ========================================
-    elif action == 'user_update':
-        topic = "ambient/user/update"
-        mqtt_payload = {
-            "event_type": "user_update",
-            "user_id": payload.get('user_id'),
-            "username": payload.get('username'),
-            "timestamp": timestamp
-        }
-        print(f'[BLE] ✏️ 사용자 정보 수정: {payload.get("user_id")}')
-
-    # ========================================
-    # 4. 풍속 변경 (speed_change)
+    # 3. 풍속 변경 (speed_change)
     # ========================================
     elif action == 'speed_change':
         speed = int(payload.get('speed', 0))
         
-        # 범위 검증
         if not (0 <= speed <= 5):
             send_notification({
                 "type": "ERROR",
@@ -344,7 +327,7 @@ def process_complete_data(data_str):
         print(f'[BLE] 💨 풍속 변경: {speed}')
 
     # ========================================
-    # 5. 각도 변경 (angle_change)
+    # 4. 각도 변경 (angle_change)
     # ========================================
     elif action == 'angle_change':
         direction = payload.get('direction', 'center')
@@ -358,7 +341,7 @@ def process_complete_data(data_str):
         print(f'[BLE] 🔄 각도 변경: {direction}')
 
     # ========================================
-    # 6. 모드 변경 (mode_change)
+    # 5. 모드 변경 (mode_change)
     # ========================================
     elif action == 'mode_change':
         mode = payload.get('mode', 'manual')
@@ -372,7 +355,7 @@ def process_complete_data(data_str):
         print(f'[BLE] 🤖 모드 변경: {mode}')
 
     # ========================================
-    # 7. 통계 조회 (stats_request)
+    # 6. 통계 조회 (stats_request)
     # ========================================
     elif action == 'stats_request':
         request_id = payload.get('request_id', f"req-{int(time.time() * 1000)}")
@@ -422,50 +405,47 @@ def process_complete_data(data_str):
             "timestamp": timestamp
         })
 
+
 # ========================================
 # BLE Write 수신 (청크 처리 포함)
 # ========================================
 def on_write_characteristic(value, options):
     """BLE Write 수신 - 청크 처리"""
-    global _mqtt_client, _chunk_buffer
+    global _mqtt_client, _chunk_buffer, _chunk_total
     
     try:
         data_str = bytes(value).decode('utf-8')
         
         # 청크 헤더 확인
-        if data_str.startswith('<CHUNK:'):
-            if '>' in data_str:
-                header_end = data_str.index('>')
-                header = data_str[7:header_end]
-                parts = header.split(',')
+        if data_str.startswith('<CHUNK:') and '>' in data_str:
+            header_end = data_str.index('>')
+            header = data_str[7:header_end]
+            
+            if header == 'END':
+                # 청크 수신 완료
+                print(f'[BLE] ✅ 청크 수신 완료: 총 {len(_chunk_buffer)}개')
+                full_data = ''.join(_chunk_buffer)
+                _chunk_buffer = []
+                _chunk_total = 0
                 
-                if len(parts) == 3:
-                    chunk_id = parts[0]
-                    current = int(parts[1])
-                    total = int(parts[2])
-                    chunk_data = data_str[header_end + 1:]
-                    
-                    # 청크 버퍼 초기화
-                    if chunk_id not in _chunk_buffer:
-                        _chunk_buffer[chunk_id] = {
-                            "data": [''] * total,
-                            "total": total,
-                            "timestamp": time.time()
-                        }
-                    
-                    # 청크 저장
-                    _chunk_buffer[chunk_id]["data"][current - 1] = chunk_data
-                    print(f'[BLE] 📦 Chunk {current}/{total} received')
-                    
-                    # 완료 확인
-                    if all(_chunk_buffer[chunk_id]["data"]):
-                        complete_data = ''.join(_chunk_buffer[chunk_id]["data"])
-                        del _chunk_buffer[chunk_id]
-                        print(f'[BLE] ✅ All chunks assembled')
-                        
-                        # 완전한 데이터 처리
-                        process_complete_data(complete_data)
-                    return
+                # 완전한 데이터 처리
+                process_complete_data(full_data)
+                return
+            
+            # 청크 번호 파싱
+            chunk_info = header.split('/')
+            if len(chunk_info) == 2:
+                chunk_num = int(chunk_info[0])
+                total_chunks = int(chunk_info[1])
+                chunk_data = data_str[header_end + 1:]
+                
+                _chunk_buffer.append(chunk_data)
+                _chunk_total = total_chunks
+                
+                # 10개마다 또는 마지막에만 로그
+                if (chunk_num + 1) % 10 == 0 or (chunk_num + 1) == total_chunks:
+                    print(f'[BLE] 📦 청크 수신: {chunk_num + 1}/{total_chunks}')
+                return
         
         # 일반 데이터 (청크 아님)
         process_complete_data(data_str)
@@ -478,6 +458,7 @@ def on_write_characteristic(value, options):
             "timestamp": datetime.now().isoformat()
         })
 
+
 # ========================================
 # BLE Read 수신 (연결 상태 확인)
 # ========================================
@@ -488,92 +469,98 @@ def on_read_characteristic():
         "timestamp": datetime.now().isoformat()
     }).encode('utf-8')
 
+
+# ========================================
+# GATT 및 광고 설정
+# ========================================
+def setup_gatt_and_advertising():
+    """GATT 서비스 및 광고 설정"""
+    global _notify_char
+
+    adapter_obj = peripheral.adapter.Adapter()
+    app = peripheral.localGATT.Application()
+    service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
+
+    write_char = peripheral.localGATT.Characteristic(
+        1, 1, WRITE_CHAR_UUID, [], False, ['write-without-response', 'write'],
+        read_callback=None, write_callback=on_write_characteristic, notify_callback=None
+    )
+
+    _notify_char = peripheral.localGATT.Characteristic(
+        1, 2, NOTIFY_CHAR_UUID, [], False, ['notify'],
+        read_callback=on_read_characteristic, write_callback=None, notify_callback=None
+    )
+
+    app.add_managed_object(service)
+    app.add_managed_object(write_char)
+    app.add_managed_object(_notify_char)
+
+    gatt_manager = peripheral.GATT.GattManager(adapter_obj.address)
+    gatt_manager.register_application(app, {})
+
+    advert = peripheral.advertisement.Advertisement(1, 'peripheral')
+    advert.local_name = DEVICE_NAME
+    advert.service_uuids = [SERVICE_UUID]
+
+    ad_manager = peripheral.advertisement.AdvertisingManager(adapter_obj.address)
+    ad_manager.register_advertisement(advert, {})
+
+    print(f'[BLE] 📡 Advertising as "{DEVICE_NAME}"')
+    print(f'[BLE] ✅ Using adapter: {adapter_obj.address}')
+    
+    threading.Thread(target=lambda: app.start(), daemon=True).start()
+    return ad_manager, advert, gatt_manager, app
+
+
+# ========================================
+# 시그널 핸들러
+# ========================================
+def signal_handler(sig, frame):
+    """종료 시그널 핸들러"""
+    print('\n[EXIT] Shutting down...')
+    if _mqtt_client:
+        _mqtt_client.loop_stop()
+        _mqtt_client.disconnect()
+    sys.exit(0)
+
+
 # ========================================
 # 메인
 # ========================================
 def main():
-    global _notify_char, _mqtt_client
+    global _mqtt_client
     
     print("=" * 60)
     print("BLE Gateway Service Starting...")
     print("=" * 60)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     # Pairing Agent 등록
     agent = register_pairing_agent()
     
     # MQTT 연결
     _mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
+    _mqtt_client.on_connect = on_mqtt_connect
     _mqtt_client.on_message = on_mqtt_message
     _mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
     _mqtt_client.loop_start()
-    
-    # MQTT 구독
-    topics = [
-        "ambient/user/register-ack",
-        "ambient/session/active",
-        "ambient/stats/response",
-        "ambient/ai/face-detected",
-        "ambient/ai/face-lost",
-    ]
-    for topic in topics:
-        _mqtt_client.subscribe(topic)
     print(f"[MQTT] ✅ Connected and subscribed")
     
     # BLE Peripheral 시작
-    try:
-        adapters = list(adapter.Adapter.available())
-        if not adapters:
-            print("[BLE] ❌ No BLE adapter found")
-            send_notification({
-                "type": "ERROR",
-                "message": "No BLE adapter found",
-                "timestamp": datetime.now().isoformat()
-            })
-            return
-
-        adapter_addr = adapters[0].address
-        print(f"[BLE] ✅ Using adapter: {adapter_addr}")
-
-        app = peripheral.Peripheral(
-            adapter_addr=adapter_addr,
-            local_name=DEVICE_NAME
-        )
-
-        app.add_service(srv_id=1, uuid=SERVICE_UUID, primary=True)
-        
-        # Write Characteristic
-        app.add_characteristic(
-            srv_id=1, chr_id=1, uuid=WRITE_CHAR_UUID,
-            value=[], notifying=False,
-            flags=['write', 'write-without-response'],
-            write_callback=on_write_characteristic
-        )
-        
-        # Notify Characteristic
-        _notify_char = app.add_characteristic(
-            srv_id=1, chr_id=2, uuid=NOTIFY_CHAR_UUID,
-            value=[], notifying=True,
-            flags=['notify', 'read'],
-            read_callback=on_read_characteristic
-        )
-        
-        print("[BLE] ✅ Peripheral started")
-        print(f"[BLE] Device Name: {DEVICE_NAME}")
-        print(f"[BLE] Service UUID: {SERVICE_UUID}")
-        
-        # 광고 시작
-        app.publish()
-        
-        # 메인 루프
-        GLib.MainLoop().run()
+    ad_mgr, advert, gatt_mgr, app = setup_gatt_and_advertising()
     
+    try:
+        GLib.MainLoop().run()
     except KeyboardInterrupt:
-        print("\n[BLE] 🛑 Shutting down...")
+        print('\n[BLE] 🛑 Shutting down...')
     finally:
         if _mqtt_client:
             _mqtt_client.loop_stop()
             _mqtt_client.disconnect()
         print("[BLE] ✅ Stopped")
+
 
 if __name__ == '__main__':
     main()
