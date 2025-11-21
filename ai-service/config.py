@@ -15,7 +15,7 @@ class Config:
     # 타이밍
     MQTT_SEND_INTERVAL = 0.1
     FACE_ID_INTERVAL = 1.0
-    FACE_LOST_TIMEOUT = 2.0
+    FACE_LOST_TIMEOUT = 8.0
     
     # 얼굴 감지
     MIN_FACE_SIZE = 800

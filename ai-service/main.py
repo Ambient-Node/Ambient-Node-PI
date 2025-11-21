@@ -4,7 +4,6 @@
 import time
 import cv2
 import mediapipe as mp
-
 from config import Config
 from camera import CameraStream
 from face_recognition import FaceRecognizer
@@ -19,11 +18,11 @@ class AIService:
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
         
+        # ✅ Config에서 타임아웃 값 주입
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
         )
-        
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
         
         # MQTT 콜백 연결
@@ -37,12 +36,16 @@ class AIService:
         )
         
         # 타이머
-        self.last_send_time = 0
-        self.last_id_time = 0
+        self.last_position_time = 0
         
         # 스케일
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
+        
+        print(f"[AI] Config loaded:")
+        print(f"  - FACE_LOST_TIMEOUT: {config.FACE_LOST_TIMEOUT}s")
+        print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
+        print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
     def on_session_update(self, session_id, user_ids):
         """세션 업데이트 콜백"""
@@ -50,154 +53,129 @@ class AIService:
         print(f"[AI] Tracking users: {user_ids}")
 
     def on_user_register(self, payload):
-        """새 사용자 등록 콜백 - 임베딩 생성 및 저장"""
+        """새 사용자 등록 콜백"""
         user_id = payload.get('user_id')
         username = payload.get('username')
-        image_path = payload.get('image_path') # 이미지 경로 받기
+        image_path = payload.get('image_path')
         
-        print(f"[AI] New user registration request: {username} ({user_id})")
+        print(f"[AI] New user registration: {username} ({user_id})")
         
         if not image_path:
-            print("[AI] Error: No image_path in payload")
+            print("[AI] Error: No image_path")
             return
-
+        
         try:
-            # [수정] 임베딩 생성 및 저장 요청
             success = self.recognizer.register_user(user_id, username, image_path)
-            
             if success:
-                print(f"[AI] User registered successfully")
+                print(f"[AI] ✅ User registered")
             else:
-                print(f"[AI] Failed to register user (check logs)")
-                
+                print(f"[AI] ❌ Registration failed")
         except Exception as e:
             print(f"[AI] Registration error: {e}")
 
     def on_user_update(self, payload):
-        """사용자 정보 업데이트 콜백 - username 변경"""
+        """사용자 정보 업데이트"""
         user_id = payload.get('user_id')
-        new_username = payload.get('username')
+        username = payload.get('username')
+        print(f"[AI] User updated: {user_id} → {username}")
         
-        print(f"[AI] User update: {user_id} → {new_username}")
-        
-        try:
-            success = self.recognizer.update_username(user_id, new_username)
-            if success:
-                print(f"[AI] Username updated in memory")
-            else:
-                print(f"[AI] Update failed (check logs)")
-        except Exception as e:
-            print(f"[AI] Update error: {e}")
-
-    def detect_faces(self, frame):
-        """얼굴 감지"""
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_detection.process(rgb)
-        
-        if not results.detections:
-            return []
-        
-        h, w = frame.shape[:2]
-        detected = []
-        
-        for detection in results.detections:
-            bbox = detection.location_data.relative_bounding_box
-            x = int(bbox.xmin * w)
-            y = int(bbox.ymin * h)
-            bw = int(bbox.width * w)
-            bh = int(bbox.height * h)
-            
-            if bw * bh < self.config.MIN_FACE_SIZE:
-                continue
-            
-            x_fhd = int(x * self.scale_x)
-            y_fhd = int(y * self.scale_y)
-            
-            detected.append({
-                'bbox': (x, y, bw, bh),
-                'center': (x_fhd + int(bw * self.scale_x) // 2,
-                          y_fhd + int(bh * self.scale_y) // 2)
-            })
-        
-        return detected
+        if user_id in self.recognizer.known_usernames:
+            self.recognizer.known_usernames[user_id] = username
 
     def run(self):
         """메인 루프"""
-        self.camera.start()
         print("[AI] Service started")
+        self.camera.start()
         
         try:
             while True:
+                current_time = time.time()
                 frame = self.camera.get_frame()
+                
                 if frame is None:
-                    time.sleep(0.001)
+                    time.sleep(0.01)
                     continue
                 
-                current_time = time.time()
+                # 1. MediaPipe로 얼굴 감지
+                detected_positions = self._detect_faces(frame)
                 
-                # 1. 얼굴 감지
-                frame_small = cv2.resize(
+                # 2. 추적 업데이트
+                updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
+                
+                # 3. ✅ Config.FACE_ID_INTERVAL 주기로 얼굴 인식
+                newly_identified = self.tracker.identify_faces(
+                    self.recognizer,
                     frame,
-                    (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
+                    current_time,
+                    interval=self.config.FACE_ID_INTERVAL
                 )
-                detected = self.detect_faces(frame_small)
                 
-                # 2. 얼굴 추적
-                updated_ids, lost_faces = self.tracker.update(detected, current_time)
+                # face-detected: 처음 인식된 사용자만 발행
+                for face_id, user_id, confidence in newly_identified:
+                    self.mqtt.publish_face_detected(user_id, confidence)
+                    print(f"[AI] 🆕 New user detected: {user_id} (conf={confidence:.2f})")
                 
-                # 3. 얼굴 신원 확인 (1초마다)
-                if current_time - self.last_id_time >= self.config.FACE_ID_INTERVAL:
-                    identified = self.tracker.identify_faces(
-                        self.recognizer,
-                        frame_small,
-                        current_time,
-                        self.config.FACE_ID_INTERVAL,
+                # ✅ face-position: Config.MQTT_SEND_INTERVAL 주기로 발행
+                if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
+                    session_id, selected_users = self.mqtt.get_current_session()
+                    selected_faces = self.tracker.get_selected_faces(selected_users)
+                    
+                    for face_info in selected_faces:
+                        user_id = face_info['user_id']
+                        x, y = face_info['center']
+                        self.mqtt.publish_face_position(user_id, x, y)
+                    
+                    self.last_position_time = current_time
+                
+                # face-lost: Config.FACE_LOST_TIMEOUT 후 발행
+                for lost_info in lost_faces:
+                    self.mqtt.publish_face_lost(
+                        lost_info['user_id'],
+                        lost_info['duration']
                     )
-                    
-                    session_id, selected_ids = self.mqtt.get_current_session()
-                    
-                    for face_id, user_id, conf in identified:
-                        if user_id not in selected_ids:
-                            continue
-                        
-                        face = self.tracker.tracked_faces.get(face_id)
-                        if face:
-                            x, y = face['center']
-                            self.mqtt.publish_face_detected(user_id, conf, x, y)
-                    
-                    self.last_id_time = current_time
+                    print(f"[AI] 👋 User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
                 
-                # 4. face_position 발행 (10Hz)
-                session_id, selected_ids = self.mqtt.get_current_session()
-                
-                if (current_time - self.last_send_time >= self.config.MQTT_SEND_INTERVAL
-                    and selected_ids):
-                    selected_faces = self.tracker.get_selected_faces(selected_ids)
-                    for face in selected_faces:
-                        x, y = face['center']
-                        self.mqtt.publish_face_position(face['user_id'], x, y)
-                    
-                    self.last_send_time = current_time
-                
-                # 5. face_lost 발행
-                if session_id and lost_faces:
-                    for lost in lost_faces:
-                        user_id = lost['user_id']
-                        duration = lost['duration']
-                        
-                        if user_id in selected_ids:
-                            self.mqtt.publish_face_lost(user_id, duration)
-                            
+                time.sleep(0.01)
+        
         except KeyboardInterrupt:
-            print("\n[AI] Terminating...")
+            print("\n[AI] Stopping...")
         finally:
             self.camera.stop()
             self.mqtt.stop()
+
+    def _detect_faces(self, frame):
+        """MediaPipe로 얼굴 감지"""
+        small = cv2.resize(frame, (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT))
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        
+        results = self.face_detection.process(rgb)
+        
+        detected = []
+        if results.detections:
+            for detection in results.detections:
+                bbox = detection.location_data.relative_bounding_box
+                
+                x_center = int((bbox.xmin + bbox.width / 2) * self.config.PROCESSING_WIDTH * self.scale_x)
+                y_center = int((bbox.ymin + bbox.height / 2) * self.config.PROCESSING_HEIGHT * self.scale_y)
+                
+                x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH * self.scale_x)
+                y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT * self.scale_y)
+                x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH * self.scale_x)
+                y2 = int((bbox.ymin + bbox.height) * self.config.PROCESSING_HEIGHT * self.scale_y)
+                
+                detected.append({
+                    'center': (x_center, y_center),
+                    'bbox': (x1, y1, x2, y2)
+                })
+        
+        return detected
+
 
 def main():
     config = Config()
     service = AIService(config)
     service.run()
+
 
 if __name__ == '__main__':
     main()
