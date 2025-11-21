@@ -314,7 +314,7 @@ def process_complete_data(data_str):
             "user_id": payload.get('user_id'),
             "username": payload.get('username'),
             "timestamp": timestamp
-    
+        }
         print(f'[BLE] 사용자 정보 수정: {payload.get("user_id")}')
 
     # ========================================
