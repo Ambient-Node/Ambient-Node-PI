@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE Gateway Service - 청크 인덱스 및 JSON 파싱 수정됨"""
+"""BLE Gateway Service - 청크 파싱 버그 수정 및 안정화"""
 
 import base64
 import os
@@ -46,9 +46,8 @@ _mqtt_client = None
 _agent_path = '/ambient/agent'
 
 # 청크 수신 버퍼
-# 리스트 형태로 관리 [ "chunk0", "chunk1", ... ]
-_chunk_buffer = [] 
-_expected_chunks = 0
+_chunk_buffer = []
+_expected_total = 0
 
 # 이미지 저장 경로
 USER_IMAGES_DIR = "/var/lib/ambient-node/users"
@@ -94,34 +93,42 @@ def register_pairing_agent():
 # 이미지 저장
 # ========================================
 def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> str:
+    # 디렉토리 생성
     if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            print(f"[IMAGE] Created directory: {save_dir}")
+        except Exception as e:
+            print(f"[IMAGE] Failed to create directory {save_dir}: {e}")
+            return ""
     
     try:
-        # 패딩 보정
+        # Base64 패딩 보정
         missing_padding = len(base64_str) % 4
         if missing_padding:
             base64_str += '=' * (4 - missing_padding)
         
         img_data = base64.b64decode(base64_str)
         
-        # 유효성 검증
+        # 이미지 유효성 검증 (PIL)
         try:
             img = Image.open(io.BytesIO(img_data))
             img.verify()
-        except Exception:
-            print(f"[IMAGE] Invalid image data")
+        except Exception as e:
+            print(f"[IMAGE] Invalid image format: {e}")
             return ""
         
         save_path = os.path.join(save_dir, filename)
+        
+        # 파일 쓰기
         with open(save_path, 'wb') as f:
             f.write(img_data)
         
-        print(f"[IMAGE] Saved: {save_path}")
+        print(f"[IMAGE] Saved successfully: {save_path}")
         return save_path
     
     except Exception as e:
-        print(f"[IMAGE] Save failed: {e}")
+        print(f"[IMAGE] Save processing error: {e}")
         return ""
 
 
@@ -141,7 +148,6 @@ def on_mqtt_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
         
-        # 토픽별 응답 처리 (Notification)
         if msg.topic == "ambient/user/register-ack":
             send_notification({
                 "type": "REGISTER_ACK",
@@ -150,7 +156,6 @@ def on_mqtt_message(client, userdata, msg):
                 "error": payload.get('error')
             })
         elif msg.topic == "ambient/ai/face-detected":
-            # 앱 UI용 간단 알림
             send_notification({
                 "type": "FACE_DETECTED",
                 "user_id": payload.get('user_id')
@@ -185,8 +190,8 @@ def process_complete_data(data_str):
         payload = json.loads(data_str)
     except json.JSONDecodeError as e:
         print(f'[WARN] JSON parse error: {e}')
-        # 데이터 앞부분 일부 출력해 디버깅
-        print(f'[DEBUG] Received Data (first 50): {data_str[:50]}')
+        # 문제의 데이터 앞부분 확인
+        print(f'[DEBUG] Raw data head: {data_str[:50]}') 
         send_notification({"type": "ERROR", "message": "Invalid JSON"})
         return
 
@@ -198,15 +203,17 @@ def process_complete_data(data_str):
 
     if action == 'user_register':
         user_id = payload.get('user_id')
-        # 앱이 user_id를 안 보냈을 경우 대비
         if not user_id:
             user_id = f"user_{int(time.time())}"
             
         username = payload.get('name', 'Unknown')
         base64_img = payload.get('image_base64')
         
+        print(f'[BLE] Processing registration for: {username} ({user_id})')
+        
         image_path = ""
         if base64_img:
+            # 이미지가 있을 때만 저장 시도
             user_dir = os.path.join(USER_IMAGES_DIR, user_id)
             filename = f"{user_id}.png"
             image_path = save_base64_image_to_png(base64_img, user_dir, filename)
@@ -218,7 +225,6 @@ def process_complete_data(data_str):
             "image_path": image_path,
             "timestamp": timestamp
         }
-        print(f'[BLE] Register request: {username}')
 
     elif action == 'speed_change':
         speed = payload.get('speed', 0)
@@ -245,7 +251,8 @@ def process_complete_data(data_str):
     # MQTT Publish
     if _mqtt_client and _mqtt_client.is_connected() and topic:
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
-        # ACK for command actions
+        
+        # 명령 계열은 즉시 ACK
         if action in ['speed_change', 'mode_change', 'user_select']:
             send_notification({"type": "ACK", "action": action, "success": True})
 
@@ -254,64 +261,76 @@ def process_complete_data(data_str):
 # BLE Write 수신
 # ========================================
 def on_write_characteristic(value, options):
-    """BLE Write 수신 - 청크 인덱싱 수정됨"""
-    global _chunk_buffer, _expected_chunks
+    global _chunk_buffer, _expected_total
     
     try:
         data_str = bytes(value).decode('utf-8')
         
-        # 1. 청크 데이터 확인 (<CHUNK:0/100>...)
+        # 1. 청크 데이터 확인
         if data_str.startswith('<CHUNK:'):
             try:
-                # <CHUNK: 제거
-                content = data_str[7:]
-                if '>' not in content:
-                    return # 잘못된 형식
+                # 헤더 닫는 괄호 찾기
+                tag_end = data_str.find('>')
+                if tag_end == -1:
+                    return
 
-                header_part, chunk_data = content.split('>', 1)
+                # 헤더 내용 추출 (예: 0/378 또는 END)
+                # index 7부터 > 직전까지
+                header_content = data_str[7:tag_end]
                 
-                if '/' in header_part:
-                    idx_str, total_str = header_part.split('/')
-                    current_idx = int(idx_str)
-                    total_chunks = int(total_str)
-                    
-                    # 버퍼 초기화 (새로운 전송 시작)
-                    if len(_chunk_buffer) != total_chunks:
-                        _chunk_buffer = [''] * total_chunks
-                        _expected_chunks = total_chunks
-                        # print(f'[BLE] New chunk stream: {total_chunks} chunks')
+                # [중요 수정] 데이터 추출 시 중복된 '>' 제거 로직
+                # data_str[tag_end+1:] 은 > 바로 뒷부분부터 시작
+                chunk_data = data_str[tag_end+1:]
+                
+                # 앱에서 구분자로 '>'를 하나 더 넣어서 보내는 경우 제거 (예: <...>>data)
+                if chunk_data.startswith('>'):
+                    chunk_data = chunk_data[1:]
 
-                    # 데이터 저장 (0-based index 그대로 사용)
-                    if 0 <= current_idx < total_chunks:
-                        _chunk_buffer[current_idx] = chunk_data
-                        
-                        # 진행 상황 로그 (너무 자주 찍히지 않게 10개 단위로)
-                        if current_idx % 10 == 0 or current_idx == total_chunks - 1:
-                            print(f'[BLE] 📦 Chunk {current_idx + 1}/{total_chunks}')
-                    
-                    # 2. 종료 조건 확인 (<CHUNK:END>가 오거나, 모든 버퍼가 찼을 때)
-                    # 여기서는 'END' 패킷을 별도로 기다리지 않고 모든 슬롯이 차면 즉시 처리
-                    if all(_chunk_buffer):
-                        print(f'[BLE] ✅ All {total_chunks} chunks received. assembling...')
+                # 종료 신호 처리
+                if header_content == 'END':
+                    if _chunk_buffer and all(_chunk_buffer):
+                        print(f'[BLE] ✅ End signal. Assembling {_expected_total} chunks...')
                         complete_data = ''.join(_chunk_buffer)
-                        
-                        # 버퍼 리셋
                         _chunk_buffer = []
-                        _expected_chunks = 0
-                        
-                        # 데이터 처리
+                        _expected_total = 0
                         process_complete_data(complete_data)
                     return
 
-                elif header_part == 'END':
-                    # END 패킷은 무시 (위에서 all() 체크로 처리됨)
+                # 일반 청크 처리
+                if '/' in header_content:
+                    idx_str, total_str = header_content.split('/')
+                    current_idx = int(idx_str)
+                    total_chunks = int(total_str)
+                    
+                    # 버퍼 초기화
+                    if _expected_total != total_chunks:
+                        _expected_total = total_chunks
+                        _chunk_buffer = [''] * total_chunks
+
+                    # 데이터 저장
+                    if 0 <= current_idx < total_chunks:
+                        _chunk_buffer[current_idx] = chunk_data
+                        
+                        if total_chunks > 10:
+                            if current_idx % (total_chunks // 10) == 0:
+                                print(f'[BLE] 📦 Chunk {current_idx + 1}/{total_chunks}')
+                        else:
+                             print(f'[BLE] 📦 Chunk {current_idx + 1}/{total_chunks}')
+
+                    # 자동 조립 (END 패킷이 유실되어도 동작하도록)
+                    if all(_chunk_buffer):
+                        print(f'[BLE] ✅ All chunks assembled (Auto).')
+                        complete_data = ''.join(_chunk_buffer)
+                        _chunk_buffer = []
+                        _expected_total = 0
+                        process_complete_data(complete_data)
                     return
 
             except ValueError as ve:
                 print(f'[BLE] Chunk parse error: {ve}')
                 return
 
-        # 3. 일반 데이터 (청크 아님)
+        # 2. 일반 데이터
         process_complete_data(data_str)
     
     except Exception as e:
@@ -324,10 +343,52 @@ def on_read_characteristic():
 
 
 # ========================================
+# GATT 및 광고 설정
+# ========================================
+def setup_gatt_and_advertising():
+    """GATT 서비스 및 광고 설정"""
+    global _notify_char
+
+    adapter_obj = peripheral.adapter.Adapter()
+    app = peripheral.localGATT.Application()
+    service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
+
+    write_char = peripheral.localGATT.Characteristic(
+        1, 1, WRITE_CHAR_UUID, [], False, ['write-without-response', 'write'],
+        read_callback=None, write_callback=on_write_characteristic, notify_callback=None
+    )
+
+    _notify_char = peripheral.localGATT.Characteristic(
+        1, 2, NOTIFY_CHAR_UUID, [], False, ['notify'],
+        read_callback=on_read_characteristic, write_callback=None, notify_callback=None
+    )
+
+    app.add_managed_object(service)
+    app.add_managed_object(write_char)
+    app.add_managed_object(_notify_char)
+
+    gatt_manager = peripheral.GATT.GattManager(adapter_obj.address)
+    gatt_manager.register_application(app, {})
+
+    advert = peripheral.advertisement.Advertisement(1, 'peripheral')
+    advert.local_name = DEVICE_NAME
+    advert.service_uuids = [SERVICE_UUID]
+
+    ad_manager = peripheral.advertisement.AdvertisingManager(adapter_obj.address)
+    ad_manager.register_advertisement(advert, {})
+
+    print(f'[BLE] 📡 Advertising as "{DEVICE_NAME}"')
+    print(f'[BLE] ✅ Using adapter: {adapter_obj.address}')
+    
+    threading.Thread(target=lambda: app.start(), daemon=True).start()
+    return ad_manager, advert, gatt_manager, app
+
+
+# ========================================
 # 메인 실행
 # ========================================
 def main():
-    global _mqtt_client, _notify_char
+    global _mqtt_client
     
     print("=" * 60)
     print("BLE Gateway Service Starting...")
@@ -344,23 +405,14 @@ def main():
     _mqtt_client.loop_start()
     
     try:
-        app = peripheral.Peripheral(DEVICE_NAME, local_name=DEVICE_NAME)
-        app.add_service(srv_id=1, uuid=SERVICE_UUID, primary=True)
-        
-        app.add_characteristic(srv_id=1, chr_id=1, uuid=WRITE_CHAR_UUID,
-            value=[], notifying=False, flags=['write', 'write-without-response'],
-            write_callback=on_write_characteristic)
-        
-        _notify_char = app.add_characteristic(srv_id=1, chr_id=2, uuid=NOTIFY_CHAR_UUID,
-            value=[], notifying=True, flags=['notify', 'read'],
-            read_callback=on_read_characteristic)
-        
-        app.publish()
+        ad_manager, advert, gatt_manager, app = setup_gatt_and_advertising()
         GLib.MainLoop().run()
         
     finally:
         if _mqtt_client:
             _mqtt_client.loop_stop()
+            _mqtt_client.disconnect()
 
 if __name__ == '__main__':
     main()
+    # 수정 확인용
