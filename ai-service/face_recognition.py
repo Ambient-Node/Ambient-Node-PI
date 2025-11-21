@@ -4,6 +4,7 @@ import os
 import cv2
 import json
 import numpy as np
+from datetime import datetime
 from tflite_runtime.interpreter import Interpreter
 
 class FaceRecognizer:
@@ -32,7 +33,8 @@ class FaceRecognizer:
         self.known_usernames = {}
         
         if not os.path.exists(self.face_dir):
-            print(f"[FaceRec] Directory not found: {self.face_dir}")
+            os.makedirs(self.face_dir, exist_ok=True) # 폴더가 없으면 생성하도록 수정
+            print(f"[FaceRec] Created directory: {self.face_dir}")
             return
         
         for user_id in os.listdir(self.face_dir):
@@ -62,11 +64,13 @@ class FaceRecognizer:
                     print(f"[FaceRec] Load error {user_id}: {e}")
         
         print(f"[FaceRec] Loaded {len(self.known_user_ids)} users")
-        for uid in self.known_user_ids:
-            print(f"  - {uid} ({self.known_usernames[uid]})")
 
     def get_embedding(self, face_img):
         """얼굴 이미지 → 임베딩"""
+        # 이미지가 비어있는지 확인
+        if face_img is None or face_img.size == 0:
+            raise ValueError("Input image is empty")
+
         img = cv2.resize(face_img, tuple(self.input_shape))
         img = img.astype(np.float32)
         img = (img - 127.5) / 128.0
@@ -76,7 +80,59 @@ class FaceRecognizer:
         self.interpreter.invoke()
         
         return self.interpreter.get_tensor(self.output_details[0]['index'])[0]
+    
+    def register_user(self, user_id, username, image_path):
+        """이미지 파일에서 임베딩을 추출하여 저장"""
+        try:
+            print(f"[FaceRec] Registering user: {username} ({user_id})")
+            print(f"[FaceRec] Reading image from: {image_path}")
 
+            # 1. 이미지 로드
+            if not os.path.exists(image_path):
+                print(f"[FaceRec] Image file not found: {image_path}")
+                return False
+
+            img = cv2.imread(image_path)
+            if img is None:
+                print(f"[FaceRec] Failed to load image (cv2.imread returned None)")
+                return False
+
+            embedding = self.get_embedding(img)
+
+            # 3. 폴더 생성 (ble_gateway가 만들었겠지만 확실하게)
+            user_dir = os.path.join(self.face_dir, user_id)
+            os.makedirs(user_dir, exist_ok=True)
+
+            # 4. embedding.npy 저장
+            emb_path = os.path.join(user_dir, "embedding.npy")
+            np.save(emb_path, embedding)
+
+            # 5. metadata.json 저장
+            meta_path = os.path.join(user_dir, "metadata.json")
+            metadata = {
+                "user_id": user_id,
+                "username": username,
+                "created_at": datetime.now().isoformat(),
+                "image_path": image_path
+            }
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"[FaceRec] Saved embedding and metadata for {user_id}")
+
+            # 6. 메모리에 즉시 반영 (재시작 없이 인식 가능하도록)
+            self.known_embeddings.append(embedding)
+            self.known_user_ids.append(user_id)
+            self.known_usernames[user_id] = username
+
+            return True
+
+        except Exception as e:
+            print(f"[FaceRec] Registration failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
     def recognize(self, face_crop):
         """얼굴 인식 (user_id, confidence)"""
         if not self.known_embeddings:

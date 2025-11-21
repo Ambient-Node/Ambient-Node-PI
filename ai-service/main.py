@@ -50,17 +50,28 @@ class AIService:
         print(f"[AI] Tracking users: {user_ids}")
 
     def on_user_register(self, payload):
-        """새 사용자 등록 콜백 - 임베딩 재로드"""
+        """새 사용자 등록 콜백 - 임베딩 생성 및 저장"""
         user_id = payload.get('user_id')
         username = payload.get('username')
+        image_path = payload.get('image_path') # 이미지 경로 받기
         
-        print(f"[AI] New user registered: {username} ({user_id})")
+        print(f"[AI] New user registration request: {username} ({user_id})")
         
+        if not image_path:
+            print("[AI] Error: No image_path in payload")
+            return
+
         try:
-            self.recognizer.reload_embeddings()
-            print(f"[AI] Embeddings reloaded successfully")
+            # [수정] 임베딩 생성 및 저장 요청
+            success = self.recognizer.register_user(user_id, username, image_path)
+            
+            if success:
+                print(f"[AI] User registered successfully")
+            else:
+                print(f"[AI] Failed to register user (check logs)")
+                
         except Exception as e:
-            print(f"[AI] Failed to reload embeddings: {e}")
+            print(f"[AI] Registration error: {e}")
 
     def on_user_update(self, payload):
         """사용자 정보 업데이트 콜백 - username 변경"""
