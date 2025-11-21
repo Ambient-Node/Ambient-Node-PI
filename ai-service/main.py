@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """AI Service - 메인 실행 파일"""
+
 import time
 import cv2
 import mediapipe as mp
+
 from config import Config
 from camera import CameraStream
 from face_recognition import FaceRecognizer
@@ -12,20 +14,22 @@ from mqtt_client import MQTTClient
 class AIService:
     def __init__(self, config):
         self.config = config
-
+        
         # 컴포넌트 초기화
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
-        # FACE_LOST_TIMEOUT 반영해서 생성
+        
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
         )
+        
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
-
+        
         # MQTT 콜백 연결
         self.mqtt.on_session_update = self.on_session_update
         self.mqtt.on_user_register = self.on_user_register
+        self.mqtt.on_user_update = self.on_user_update    # ← 추가!
         
         # MediaPipe
         self.face_detection = mp.solutions.face_detection.FaceDetection(
@@ -39,26 +43,41 @@ class AIService:
         # 스케일
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
-    
+
     def on_session_update(self, session_id, user_ids):
         """세션 업데이트 콜백"""
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
-    
+
     def on_user_register(self, payload):
         """새 사용자 등록 콜백 - 임베딩 재로드"""
         user_id = payload.get('user_id')
         username = payload.get('username')
         
-        print(f"[AI] 🔄 Reloading embeddings for new user: {username}")
+        print(f"[AI] New user registered: {username} ({user_id})")
         
-        # 얼굴 인식기에 임베딩 재로드 요청
         try:
-            self.recognizer.load_known_faces()
+            self.recognizer.reload_embeddings()
             print(f"[AI] Embeddings reloaded successfully")
         except Exception as e:
             print(f"[AI] Failed to reload embeddings: {e}")
-    
+
+    def on_user_update(self, payload):
+        """사용자 정보 업데이트 콜백 - username 변경"""
+        user_id = payload.get('user_id')
+        new_username = payload.get('username')
+        
+        print(f"[AI] 📝 User update: {user_id} → {new_username}")
+        
+        try:
+            success = self.recognizer.update_username(user_id, new_username)
+            if success:
+                print(f"[AI] Username updated in memory")
+            else:
+                print(f"[AI] Update failed (check logs)")
+        except Exception as e:
+            print(f"[AI] Update error: {e}")
+
     def detect_faces(self, frame):
         """얼굴 감지"""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -90,31 +109,31 @@ class AIService:
             })
         
         return detected
-    
+
     def run(self):
         """메인 루프"""
         self.camera.start()
         print("[AI] Service started")
-
+        
         try:
             while True:
                 frame = self.camera.get_frame()
                 if frame is None:
                     time.sleep(0.001)
                     continue
-
+                
                 current_time = time.time()
-
+                
                 # 1. 얼굴 감지
                 frame_small = cv2.resize(
                     frame,
                     (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
                 )
                 detected = self.detect_faces(frame_small)
-
-                # 2. 얼굴 추적 + 사라진 얼굴(lost) 계산
+                
+                # 2. 얼굴 추적
                 updated_ids, lost_faces = self.tracker.update(detected, current_time)
-
+                
                 # 3. 얼굴 신원 확인 (1초마다)
                 if current_time - self.last_id_time >= self.config.FACE_ID_INTERVAL:
                     identified = self.tracker.identify_faces(
@@ -123,48 +142,46 @@ class AIService:
                         current_time,
                         self.config.FACE_ID_INTERVAL,
                     )
-
+                    
                     session_id, selected_ids = self.mqtt.get_current_session()
-
+                    
                     for face_id, user_id, conf in identified:
-                        # 선택된 사용자만 발행
                         if user_id not in selected_ids:
                             continue
-
+                        
                         face = self.tracker.tracked_faces.get(face_id)
                         if face:
                             x, y = face['center']
                             self.mqtt.publish_face_detected(user_id, conf, x, y)
-
+                    
                     self.last_id_time = current_time
-
+                
                 # 4. face_position 발행 (10Hz)
                 session_id, selected_ids = self.mqtt.get_current_session()
+                
                 if (current_time - self.last_send_time >= self.config.MQTT_SEND_INTERVAL
-                        and selected_ids):
+                    and selected_ids):
                     selected_faces = self.tracker.get_selected_faces(selected_ids)
                     for face in selected_faces:
                         x, y = face['center']
                         self.mqtt.publish_face_position(face['user_id'], x, y)
-
+                    
                     self.last_send_time = current_time
-
-                # 5. face_lost 발행 (타임아웃된 얼굴)
-                #   - 세션이 있고
-                #   - user_id가 선택된 사용자에 포함된 경우만 발행
+                
+                # 5. face_lost 발행
                 if session_id and lost_faces:
                     for lost in lost_faces:
                         user_id = lost['user_id']
                         duration = lost['duration']
+                        
                         if user_id in selected_ids:
                             self.mqtt.publish_face_lost(user_id, duration)
-
+                            
         except KeyboardInterrupt:
             print("\n[AI] Terminating...")
         finally:
             self.camera.stop()
             self.mqtt.stop()
-
 
 def main():
     config = Config()
