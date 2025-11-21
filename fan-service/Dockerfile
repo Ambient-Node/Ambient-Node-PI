@@ -19,15 +19,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 소스 파일 복사 (모듈별로)
-COPY config.py .
-COPY hardware.py .
-COPY mqtt_client.py .
-COPY handlers.py .
-COPY main.py .
-
-# 또는 와일드카드 사용
-# COPY *.py ./
+# 소스 파일 복사
+COPY *.py /app/
 
 # 볼륨 마운트 포인트
 RUN mkdir -p /var/lib/ambient-node/users
