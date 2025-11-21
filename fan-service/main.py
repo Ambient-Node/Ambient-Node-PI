@@ -21,8 +21,8 @@ class FanService:
             level = int(payload.get("speed", 0))
             self.hw.send_command(f"SPEED {level}")
         elif topic == "ambient/command/angle":
-            direction = payload.get("direction", "center")
-            self.hw.send_command(f"ANGLE {direction}")
+            angle = payload.get("angle", "center")
+            self.hw.send_command(f"ANGLE {angle}")
         elif topic == "ambient/ai/face-position":
             user_id = payload.get("user_id")
             x = payload.get("x")

@@ -4,11 +4,16 @@ After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=/home/pi/ambient-node
-ExecStart=/usr/bin/docker compose up -d
+ExecStart=/usr/bin/docker compose up
 ExecStop=/usr/bin/docker compose down
-RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300
+TimeoutStopSec=300
+TimeoutSec=300
+RemainAfterExit=no
 
 [Install]
 WantedBy=multi-user.target

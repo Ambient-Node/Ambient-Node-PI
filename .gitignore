@@ -1,4 +1,5 @@
 .env
 
-BLE_gateway/.venv
-init.sql/
+# Services/.venv
+# init.sql/
+

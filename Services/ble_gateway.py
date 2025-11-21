@@ -232,6 +232,12 @@ def process_complete_data(data_str):
         mqtt_payload = {"event_type": "speed_change", "speed": speed, "timestamp": timestamp}
         print(f'[BLE] Speed: {speed}')
 
+    elif action == 'angle_change':
+        angle = payload.get('angle', 'center')
+        topic = "ambient/command/angle"
+        mqtt_payload = {"event_type": "angle_change", "angle": angle, "timestamp": timestamp}
+        print(f'[BLE] Angle: {angle}')        
+
     elif action == 'mode_change':
         mode = payload.get('mode', 'manual')
         topic = "ambient/command/mode"

@@ -29,7 +29,14 @@ class FanHardware:
         while self.running and self.ser and self.ser.is_open:
             try:
                 if self.ser.in_waiting > 0:
-                    line = self.ser.readline().decode('utf-8').strip()
+                    raw_line = self.ser.readline()
+                    try:
+                        line = raw_line.decode('utf-8').strip()
+                    except UnicodeDecodeError:
+                        # 디코딩 실패 시 안전하게 무시하거나 로그만 출력
+                        print(f"[UART] ⚠️ Decode error, raw bytes: {raw_line}")
+                        continue  # 다음 패킷 대기
+                    
                     if line:
                         print(f"[UART] ⬅️ {line}")
                         self.on_status_received(line)
