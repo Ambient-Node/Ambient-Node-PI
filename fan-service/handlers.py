@@ -29,7 +29,7 @@ class FanHandlers:
     # 명령 처리 (speed / angle / mode)
     # --------------------------------------------------
     def handle_command(self, cmd: str, payload: dict):
-        print(f"[CMD] 🎯 Command: {cmd}")
+        print(f"[CMD] Command: {cmd}")
 
         if cmd == "speed":
             # 항상 0~5 단계로만 받는다
@@ -109,7 +109,7 @@ class FanHandlers:
                 target = max(0, min(180, int(absolute_angle)))
             except Exception:
                 target = 90
-            print(f"[ANGLE] 🎯 Absolute H angle → {target}°")
+            print(f"[ANGLE] Absolute H angle → {target}°")
             self.hw.rotate_motor_2axis("horizontal", target)
             return
 
@@ -131,11 +131,6 @@ class FanHandlers:
         elif direction == "down":
             target_v = min(180, _current_angle_v + step_angle)
             self.hw.rotate_motor_2axis("vertical", target_v)
-
-        elif direction == "center":
-            # 가운데(정면)으로 복귀
-            self.hw.rotate_motor_2axis("horizontal", 90)
-            self.hw.rotate_motor_2axis("vertical", 90)
 
         else:
             print(f"[ANGLE] ⚠️ Unknown direction: {direction}")

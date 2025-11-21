@@ -202,7 +202,7 @@ def on_mqtt_message(client, userdata, msg):
             })
     
     except Exception as e:
-        print(f"[MQTT] ❌ Message error: {e}")
+        print(f"[MQTT] Message error: {e}")
 
 
 # ========================================
@@ -215,9 +215,9 @@ def send_notification(data: dict):
         try:
             payload = json.dumps(data)
             _notify_char.set_value(payload.encode('utf-8'))
-            print(f"[BLE] 📤 Notify sent: {data.get('type')}")
+            print(f"[BLE] Notify sent: {data.get('type')}")
         except Exception as e:
-            print(f"[BLE] ❌ Notify error: {e}")
+            print(f"[BLE] Notify error: {e}")
 
 
 # ========================================
@@ -275,7 +275,7 @@ def process_complete_data(data_str):
             "image_path": image_path,
             "timestamp": timestamp
         }
-        print(f'[BLE] 🔐 사용자 등록: {username} ({user_id})')
+        print(f'[BLE] 사용자 등록: {username} ({user_id})')
 
     # ========================================
     # 2. 사용자 선택 (user_select)
@@ -299,13 +299,26 @@ def process_complete_data(data_str):
         }
         
         if len(user_list) == 0:
-            print(f'[BLE] ❌ 모든 사용자 선택 해제')
+            print(f'[BLE] 모든 사용자 선택 해제')
         else:
             usernames = [u.get('name', u.get('user_id', '?')) for u in user_list]
-            print(f'[BLE] 👥 사용자 선택: {", ".join(usernames)} ({len(user_list)}명)')
+            print(f'[BLE] 사용자 선택: {", ".join(usernames)} ({len(user_list)}명)')
 
     # ========================================
-    # 3. 풍속 변경 (speed_change)
+    # 3. 사용자 정보 수정 (user_update)
+    # ========================================
+    elif action == 'user_update':
+        topic = "ambient/user/update"
+        mqtt_payload = {
+            "event_type": "user_update",
+            "user_id": payload.get('user_id'),
+            "username": payload.get('username'),
+            "timestamp": timestamp
+    
+        print(f'[BLE] 사용자 정보 수정: {payload.get("user_id")}')
+
+    # ========================================
+    # 4. 풍속 변경 (speed_change)
     # ========================================
     elif action == 'speed_change':
         speed = int(payload.get('speed', 0))
@@ -324,7 +337,7 @@ def process_complete_data(data_str):
             "speed": speed,
             "timestamp": timestamp
         }
-        print(f'[BLE] 💨 풍속 변경: {speed}')
+        print(f'[BLE] 풍속 변경: {speed}')
 
     # ========================================
     # 4. 각도 변경 (angle_change)
@@ -338,7 +351,7 @@ def process_complete_data(data_str):
             "direction": direction,
             "timestamp": timestamp
         }
-        print(f'[BLE] 🔄 각도 변경: {direction}')
+        print(f'[BLE] 각도 변경: {direction}')
 
     # ========================================
     # 5. 모드 변경 (mode_change)
@@ -352,7 +365,7 @@ def process_complete_data(data_str):
             "mode": mode,
             "timestamp": timestamp
         }
-        print(f'[BLE] 🤖 모드 변경: {mode}')
+        print(f'[BLE] 모드 변경: {mode}')
 
     # ========================================
     # 6. 통계 조회 (stats_request)
@@ -417,41 +430,45 @@ def on_write_characteristic(value, options):
         data_str = bytes(value).decode('utf-8')
         
         # 청크 헤더 확인
-        if data_str.startswith('<CHUNK:') and '>' in data_str:
-            header_end = data_str.index('>')
-            header = data_str[7:header_end]
-            
-            if header == 'END':
-                # 청크 수신 완료
-                print(f'[BLE] ✅ 청크 수신 완료: 총 {len(_chunk_buffer)}개')
-                full_data = ''.join(_chunk_buffer)
-                _chunk_buffer = []
-                _chunk_total = 0
+        if data_str.startswith('<CHUNK:'):
+            if '>' in data_str:
+                header_end = data_str.index('>')
+                header = data_str[7:header_end]
+                parts = header.split(',')
                 
-                # 완전한 데이터 처리
-                process_complete_data(full_data)
-                return
-            
-            # 청크 번호 파싱
-            chunk_info = header.split('/')
-            if len(chunk_info) == 2:
-                chunk_num = int(chunk_info[0])
-                total_chunks = int(chunk_info[1])
-                chunk_data = data_str[header_end + 1:]
-                
-                _chunk_buffer.append(chunk_data)
-                _chunk_total = total_chunks
-                
-                # 10개마다 또는 마지막에만 로그
-                if (chunk_num + 1) % 10 == 0 or (chunk_num + 1) == total_chunks:
-                    print(f'[BLE] 📦 청크 수신: {chunk_num + 1}/{total_chunks}')
-                return
+                if len(parts) == 3:
+                    chunk_id = parts[0]
+                    current = int(parts[1])
+                    total = int(parts[2])
+                    chunk_data = data_str[header_end + 1:]
+                    
+                    # 청크 버퍼 초기화
+                    if chunk_id not in _chunk_buffer:
+                        _chunk_buffer[chunk_id] = {
+                            "data": [''] * total,
+                            "total": total,
+                            "timestamp": time.time()
+                        }
+                    
+                    # 청크 저장
+                    _chunk_buffer[chunk_id]["data"][current - 1] = chunk_data
+                    print(f'[BLE] 📦 Chunk {current}/{total} received')
+                    
+                    # 완료 확인
+                    if all(_chunk_buffer[chunk_id]["data"]):
+                        complete_data = ''.join(_chunk_buffer[chunk_id]["data"])
+                        del _chunk_buffer[chunk_id]
+                        print(f'[BLE] All chunks assembled')
+                        
+                        # 완전한 데이터 처리
+                        process_complete_data(complete_data)
+                    return
         
         # 일반 데이터 (청크 아님)
         process_complete_data(data_str)
     
     except Exception as e:
-        print(f'[BLE] ❌ Write error: {e}')
+        print(f'[BLE] Write error: {e}')
         send_notification({
             "type": "ERROR",
             "message": str(e),
@@ -546,20 +563,56 @@ def main():
     _mqtt_client.on_message = on_mqtt_message
     _mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
     _mqtt_client.loop_start()
-    print(f"[MQTT] ✅ Connected and subscribed")
+    
+    # MQTT 구독
+    topics = [
+        "ambient/user/register-ack",
+        "ambient/session/active",
+        "ambient/stats/response",
+        "ambient/ai/face-detected",
+        "ambient/ai/face-lost",
+    ]
+    for topic in topics:
+        _mqtt_client.subscribe(topic)
+    print(f"[MQTT] Connected and subscribed")
     
     # BLE Peripheral 시작
-    ad_mgr, advert, gatt_mgr, app = setup_gatt_and_advertising()
-    
     try:
+        app = peripheral.Peripheral(DEVICE_NAME, local_name=DEVICE_NAME)
+        app.add_service(srv_id=1, uuid=SERVICE_UUID, primary=True)
+        
+        # Write Characteristic
+        app.add_characteristic(
+            srv_id=1, chr_id=1, uuid=WRITE_CHAR_UUID,
+            value=[], notifying=False,
+            flags=['write', 'write-without-response'],
+            write_callback=on_write_characteristic
+        )
+        
+        # Notify Characteristic
+        _notify_char = app.add_characteristic(
+            srv_id=1, chr_id=2, uuid=NOTIFY_CHAR_UUID,
+            value=[], notifying=True,
+            flags=['notify', 'read'],
+            read_callback=on_read_characteristic
+        )
+        
+        print("[BLE] Peripheral started")
+        print(f"[BLE] Device Name: {DEVICE_NAME}")
+        print(f"[BLE] Service UUID: {SERVICE_UUID}")
+        
+        # 광고 시작
+        app.publish()
+        
+        # 메인 루프
         GLib.MainLoop().run()
     except KeyboardInterrupt:
-        print('\n[BLE] 🛑 Shutting down...')
+        print("\n[BLE] Shutting down...")
     finally:
         if _mqtt_client:
             _mqtt_client.loop_stop()
             _mqtt_client.disconnect()
-        print("[BLE] ✅ Stopped")
+        print("[BLE] Stopped")
 
 
 if __name__ == '__main__':

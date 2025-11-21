@@ -29,7 +29,7 @@ class AIService:
         # MQTT 콜백 연결
         self.mqtt.on_session_update = self.on_session_update
         self.mqtt.on_user_register = self.on_user_register
-        self.mqtt.on_user_update = self.on_user_update    # ← 추가!
+        self.mqtt.on_user_update = self.on_user_update
         
         # MediaPipe
         self.face_detection = mp.solutions.face_detection.FaceDetection(
@@ -67,7 +67,7 @@ class AIService:
         user_id = payload.get('user_id')
         new_username = payload.get('username')
         
-        print(f"[AI] 📝 User update: {user_id} → {new_username}")
+        print(f"[AI] User update: {user_id} → {new_username}")
         
         try:
             success = self.recognizer.update_username(user_id, new_username)
