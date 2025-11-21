@@ -3,7 +3,7 @@ import os
 
 class Config:
     # TCP
-    TCP_IP = '127.0.0.1'
+    TCP_IP = 'localhost'
     TCP_PORT = 8888
     
     # 카메라

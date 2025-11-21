@@ -97,7 +97,6 @@ class FanMQTTClient:
                 "ambient/command/#",          # 팬 제어 명령 (speed/angle/mode 등)
                 "ambient/ai/face-detected",   # AI 얼굴 감지
                 "ambient/user/register",      # 사용자 등록
-                "ambient/user/select",        # 사용자 선택
             ]
             
             for topic in topics:
