@@ -247,8 +247,7 @@ def process_complete_data(data_str):
     # 1. 사용자 등록 (user_register)
     # ========================================
     if action == 'user_register':
-        # UUID로 고유 ID 생성
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user_id = payload.get('user_id')
         username = payload.get('name', 'Unknown')
         base64_img = payload.get('image_base64')
         
