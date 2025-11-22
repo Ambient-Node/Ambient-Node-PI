@@ -113,7 +113,6 @@ class AIService:
                 # face-detected: 처음 인식된 사용자만 발행
                 for face_id, user_id, confidence in newly_identified:
                     self.mqtt.publish_face_detected(user_id, confidence)
-                    print(f"[AI] 🆕 New user detected: {user_id} (conf={confidence:.2f})")
                 
                 # ✅ face-position: Config.MQTT_SEND_INTERVAL 주기로 발행
                 if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
