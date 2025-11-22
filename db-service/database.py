@@ -89,6 +89,9 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_events_session ON device_events(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_events_user ON device_events(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_active ON user_sessions(is_active) WHERE is_active = TRUE",
+            "CREATE INDEX IF NOT EXISTS idx_events_type_time ON device_events(event_type, timestamp DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_events_user_time ON device_events(user_id, timestamp DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_start ON user_sessions(session_start DESC)",
         ]
 
         for q in queries:
