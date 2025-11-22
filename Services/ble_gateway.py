@@ -249,7 +249,10 @@ def process_complete_data(data_str):
         topic = "ambient/user/select"
         mqtt_payload = {"event_type": "user_select", "user_list": user_list, "timestamp": timestamp}
         print(f'[BLE] User select: {len(user_list)} users')
-
+        
+    elif action == 'shutdown':
+        os.system('sudo shutdown -h now')
+        
     else:
         print(f'[WARN] Unknown action: {action}')
         return
