@@ -17,12 +17,12 @@ class FanHardware:
                 self.config.SERIAL_BAUDRATE,
                 timeout=1
             )
-            print(f"[UART] ✅ Connected to {self.config.SERIAL_PORT} @ {self.config.SERIAL_BAUDRATE}")
+            print(f"[UART] Connected to {self.config.SERIAL_PORT} @ {self.config.SERIAL_BAUDRATE}")
             time.sleep(2)
             self.running = True
             threading.Thread(target=self._read_loop, daemon=True).start()
         except Exception as e:
-            print(f"[UART] ❌ Connection failed: {e}")
+            print(f"[UART] Connection failed: {e}")
             self.ser = None
     
     def _read_loop(self):
@@ -34,19 +34,19 @@ class FanHardware:
                         line = raw_line.decode('utf-8').strip()
                     except UnicodeDecodeError:
                         # 디코딩 실패 시 안전하게 무시하거나 로그만 출력
-                        print(f"[UART] ⚠️ Decode error, raw bytes: {raw_line}")
+                        print(f"[UART] Decode error, raw bytes: {raw_line}")
                         continue  # 다음 패킷 대기
                     
                     if line:
                         print(f"[UART] ⬅️ {line}")
                         self.on_status_received(line)
             except Exception as e:
-                print(f"[UART] ❌ Read error: {e}")
+                print(f"[UART] Read error: {e}")
                 time.sleep(1)
     
     def send_command(self, cmd: str):
         if not self.ser or not self.ser.is_open:
-            print("[UART] ⚠️ Serial not open")
+            print("[UART] Serial not open")
             return
         try:
             line = (cmd.strip() + "\n").encode("utf-8")
@@ -54,13 +54,13 @@ class FanHardware:
             self.ser.flush()
             print(f"[UART] ➡️ {cmd}")
         except Exception as e:
-            print(f"[UART] ❌ Write failed: {e}")
+            print(f"[UART] Write failed: {e}")
     
     def cleanup(self):
         self.running = False
         if self.ser and self.ser.is_open:
             try:
                 self.ser.close()
-                print("[UART] 🔌 Disconnected")
+                print("[UART] Disconnected")
             except Exception:
                 pass

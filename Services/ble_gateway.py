@@ -234,8 +234,9 @@ def process_complete_data(data_str):
 
     elif action == 'angle_change':
         angle = payload.get('angle', 'center')
+        toggleOn = payload.get('toggleOn', 0)
         topic = "ambient/command/angle"
-        mqtt_payload = {"event_type": "angle_change", "angle": angle, "timestamp": timestamp}
+        mqtt_payload = {"event_type": "angle_change", "angle": angle, "toggleOn": toggleOn, "timestamp": timestamp}
         print(f'[BLE] Angle: {angle}')        
 
     elif action == 'mode_change':

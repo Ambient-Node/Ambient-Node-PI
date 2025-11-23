@@ -10,19 +10,23 @@ class FanService:
     def __init__(self, config):
         self.config = config
         self.running = True
-        self.tracked_positions = {}  # {user_id: (x, y)}
+        self.tracked_positions = {}
         
         self.hw = FanHardware(config, self.on_arduino_status)
         self.mqtt = FanMQTTClient(config, self.handle_mqtt_message)
     
     def handle_mqtt_message(self, topic: str, payload: dict):
         print(f"[MQTT] 📥 {topic}: {payload}")
+        
         if topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
-            self.hw.send_command(f"SPEED {level}")
+            self.hw.send_command(f"S {level}")
+            
         elif topic == "ambient/command/angle":
-            direction = payload.get("direction", "center")
-            self.hw.send_command(f"ANGLE {direction}")
+            angle = payload.get("angle", "center") # direction : up, down, right, left, center -> u d r l c // toggleIsOn = true(1), false(0)
+            toggleOn = payload.get("toggleOn", 0)
+            self.hw.send_command(f"A {angle} {toggleOn}")
+            
         elif topic == "ambient/ai/face-position":
             user_id = payload.get("user_id")
             x = payload.get("x")
@@ -39,17 +43,17 @@ class FanService:
     
     def _send_positions(self):
         if not self.tracked_positions:
-            self.hw.send_command("POSITION none")
+            self.hw.send_command("P X")
             return
         
         positions = list(self.tracked_positions.values())
         if len(positions) == 1:
             x, y = positions[0]
-            self.hw.send_command(f"POSITION ({x},{y})")
+            self.hw.send_command(f"P ({x},{y})")
         elif len(positions) == 2:
             x1, y1 = positions[0]
             x2, y2 = positions[1]
-            self.hw.send_command(f"POSITION ({x1},{y1}):({x2},{y2})")
+            self.hw.send_command(f"P ({x1},{y1}) ({x2},{y2})")
     
     def on_arduino_status(self, line: str):
         if line.startswith("STATUS"):
