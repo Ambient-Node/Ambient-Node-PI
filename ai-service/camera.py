@@ -83,7 +83,7 @@ class CameraStream:
         """가장 최근 프레임 반환"""
         with self.lock:
             if self.frame_queue:
-                return self.frame_queue[-1].copy()
+                return self.frame_queue[-1]
         return None
 
     def stop(self):

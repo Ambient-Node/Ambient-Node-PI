@@ -1,12 +1,13 @@
 """얼굴 추적 관리"""
 import threading
 
+
 class FaceTracker:
-    def __init__(self, max_distance=300, lost_timeout=2.0):
-        self.tracked_faces = {}          # {face_id: {user_id, center, bbox, last_seen, last_identified, first_seen?}}
+    def __init__(self, max_distance=300, lost_timeout=8.0):
+        self.tracked_faces = {}
         self.next_id = 0
         self.max_distance = max_distance
-        self.lost_timeout = lost_timeout
+        self.lost_timeout = lost_timeout  # Config에서 주입받음
         self.lock = threading.Lock()
 
     def update(self, detected_positions, current_time):
@@ -41,7 +42,6 @@ class FaceTracker:
                         'bbox': pos['bbox'],
                         'last_seen': current_time,
                         'last_identified': 0.0,
-                        # 'first_seen'는 인식 시점에 설정
                     }
                     updated_ids.add(self.next_id)
                     self.next_id += 1
@@ -94,36 +94,44 @@ class FaceTracker:
         return lost_faces
 
     def identify_faces(self, recognizer, frame, current_time, interval):
-        """얼굴 신원 확인"""
+        """얼굴 신원 확인
+        
+        ⚠️ frame은 PROCESSING_WIDTH × PROCESSING_HEIGHT 크기여야 함!
+        """
         with self.lock:
-            identified = []
-
+            newly_identified = []
+            
             for fid, finfo in self.tracked_faces.items():
-                # 식별 주기 제한
                 if current_time - finfo['last_identified'] < interval:
                     continue
-
-                x, y, w, h = finfo['bbox']
-                face_crop = frame[y:y+h, x:x+w]
+                
+                # bbox는 processing 해상도 좌표
+                bbox = finfo['bbox']
+                x1, y1, x2, y2 = bbox
+                
+                # ⚠️ frame이 FHD면 문제! processing 해상도 frame 전달 필요
+                face_crop = frame[y1:y2, x1:x2]
+                
                 if face_crop.size == 0:
                     continue
-
+                
                 user_id, confidence = recognizer.recognize(face_crop)
+                
                 if user_id:
                     finfo['user_id'] = user_id
                     finfo['confidence'] = confidence
                     finfo['last_identified'] = current_time
-                    # 처음 인식된 시점 기록
+                    
                     if 'first_seen' not in finfo:
                         finfo['first_seen'] = current_time
-                    identified.append((fid, user_id, confidence))
-
-            return identified
-
+                        newly_identified.append((fid, user_id, confidence))
+        
+        return newly_identified
     def get_selected_faces(self, selected_user_ids):
         """선택된 사용자 얼굴만"""
         with self.lock:
             return [
-                finfo for finfo in self.tracked_faces.values()
+                {**finfo, 'face_id': fid}
+                for fid, finfo in self.tracked_faces.items()
                 if finfo.get('user_id') in selected_user_ids
             ]

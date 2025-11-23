@@ -18,7 +18,7 @@ class AIService:
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
         
-        # ✅ Config에서 타임아웃 값 주입
+        # Config에서 타임아웃 값 주입
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
@@ -67,9 +67,9 @@ class AIService:
         try:
             success = self.recognizer.register_user(user_id, username, image_path)
             if success:
-                print(f"[AI] ✅ User registered")
+                print(f"[AI] User registered")
             else:
-                print(f"[AI] ❌ Registration failed")
+                print(f"[AI] Registration failed")
         except Exception as e:
             print(f"[AI] Registration error: {e}")
 
@@ -96,16 +96,22 @@ class AIService:
                     time.sleep(0.01)
                     continue
                 
+                # ⚠️ processing 해상도로 리사이즈 (MediaPipe + 인식용)
+                frame_processing = cv2.resize(
+                    frame, 
+                    (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
+                )
+            
                 # 1. MediaPipe로 얼굴 감지
-                detected_positions = self._detect_faces(frame)
+                detected_positions = self._detect_faces(frame_processing)
                 
                 # 2. 추적 업데이트
                 updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
-                
-                # 3. ✅ Config.FACE_ID_INTERVAL 주기로 얼굴 인식
+            
+                # 3. 얼굴 인식 (processing 프레임 전달!)
                 newly_identified = self.tracker.identify_faces(
                     self.recognizer,
-                    frame,
+                    frame_processing,  # ⚠️ FHD가 아닌 processing 프레임
                     current_time,
                     interval=self.config.FACE_ID_INTERVAL
                 )
@@ -114,7 +120,7 @@ class AIService:
                 for face_id, user_id, confidence in newly_identified:
                     self.mqtt.publish_face_detected(user_id, confidence)
                 
-                # ✅ face-position: Config.MQTT_SEND_INTERVAL 주기로 발행
+                # face-position: Config.MQTT_SEND_INTERVAL 주기로 발행
                 if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
                     session_id, selected_users = self.mqtt.get_current_session()
                     selected_faces = self.tracker.get_selected_faces(selected_users)
@@ -142,11 +148,13 @@ class AIService:
             self.camera.stop()
             self.mqtt.stop()
 
-    def _detect_faces(self, frame):
-        """MediaPipe로 얼굴 감지"""
-        small = cv2.resize(frame, (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT))
-        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    def _detect_faces(self, frame_processing):
+        """MediaPipe로 얼굴 감지
         
+        Args:
+            frame_processing: 이미 PROCESSING_WIDTH × PROCESSING_HEIGHT로 리사이즈된 프레임
+        """
+        rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
         results = self.face_detection.process(rgb)
         
         detected = []
@@ -154,17 +162,19 @@ class AIService:
             for detection in results.detections:
                 bbox = detection.location_data.relative_bounding_box
                 
-                x_center = int((bbox.xmin + bbox.width / 2) * self.config.PROCESSING_WIDTH * self.scale_x)
-                y_center = int((bbox.ymin + bbox.height / 2) * self.config.PROCESSING_HEIGHT * self.scale_y)
+                # processing 해상도에서 bbox 계산
+                x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH)
+                y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT)
+                x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH)
+                y2 = int((bbox.ymin + bbox.height) * self.config.PROCESSING_HEIGHT)
                 
-                x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH * self.scale_x)
-                y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT * self.scale_y)
-                x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH * self.scale_x)
-                y2 = int((bbox.ymin + bbox.height) * self.config.PROCESSING_HEIGHT * self.scale_y)
+                # FHD 좌표로 center만 스케일링 (MQTT 전송용)
+                x_center_fhd = int((bbox.xmin + bbox.width / 2) * self.config.PROCESSING_WIDTH * self.scale_x)
+                y_center_fhd = int((bbox.ymin + bbox.height / 2) * self.config.PROCESSING_HEIGHT * self.scale_y)
                 
                 detected.append({
-                    'center': (x_center, y_center),
-                    'bbox': (x1, y1, x2, y2)
+                    'center': (x_center_fhd, y_center_fhd),  # FHD 좌표 (MQTT용)
+                    'bbox': (x1, y1, x2, y2)  # processing 좌표 (인식용)
                 })
         
         return detected
