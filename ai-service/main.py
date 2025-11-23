@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Service - 메인 실행 파일"""
+"""AI Service - 메인 실행 파일 (최적화)"""
 
 import time
 import cv2
@@ -14,31 +14,21 @@ class AIService:
     def __init__(self, config):
         self.config = config
         
-        # 컴포넌트 초기화
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
-        
-        # Config에서 타임아웃 값 주입
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
         )
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
         
-        # MQTT 콜백 연결
         self.mqtt.on_session_update = self.on_session_update
         self.mqtt.on_user_register = self.on_user_register
         self.mqtt.on_user_update = self.on_user_update
         
-        # MediaPipe
-        self.face_detection = mp.solutions.face_detection.FaceDetection(
-            model_selection=1, min_detection_confidence=0.3
-        )
+        # ✅ MediaPipe는 run()에서 with문으로 생성
         
-        # 타이머
         self.last_position_time = 0
-        
-        # 스케일
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
         
@@ -48,12 +38,10 @@ class AIService:
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
     def on_session_update(self, session_id, user_ids):
-        """세션 업데이트 콜백"""
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
 
     def on_user_register(self, payload):
-        """새 사용자 등록 콜백"""
         user_id = payload.get('user_id')
         username = payload.get('username')
         image_path = payload.get('image_path')
@@ -74,7 +62,6 @@ class AIService:
             print(f"[AI] Registration error: {e}")
 
     def on_user_update(self, payload):
-        """사용자 정보 업데이트"""
         user_id = payload.get('user_id')
         username = payload.get('username')
         print(f"[AI] User updated: {user_id} → {username}")
@@ -83,108 +70,127 @@ class AIService:
             self.recognizer.known_usernames[user_id] = username
 
     def run(self):
-        """메인 루프"""
+        """메인 루프 (원본 스타일로 최적화)"""
         print("[AI] Service started")
         self.camera.start()
         
-        try:
-            while True:
-                current_time = time.time()
-                frame = self.camera.get_frame()
-                
-                if frame is None:
-                    time.sleep(0.01)
-                    continue
-                
-                # ⚠️ processing 해상도로 리사이즈 (MediaPipe + 인식용)
-                frame_processing = cv2.resize(
-                    frame, 
-                    (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
-                )
+        # ✅ MediaPipe context manager 사용
+        with mp.solutions.face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.3
+        ) as face_detection:
             
-                # 1. MediaPipe로 얼굴 감지
-                detected_positions = self._detect_faces(frame_processing)
-                
-                # 2. 추적 업데이트
-                updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
+            # ✅ 전역 인식 타이머 (원본 방식)
+            last_global_identify_time = 0
+            frame_count = 0
+            fps_start = time.time()
+            fps = 0.0
             
-                # 3. 얼굴 인식 (processing 프레임 전달!)
-                newly_identified = self.tracker.identify_faces(
-                    self.recognizer,
-                    frame_processing,  # ⚠️ FHD가 아닌 processing 프레임
-                    current_time,
-                    interval=self.config.FACE_ID_INTERVAL
-                )
-                
-                # face-detected: 처음 인식된 사용자만 발행
-                for face_id, user_id, confidence in newly_identified:
-                    self.mqtt.publish_face_detected(user_id, confidence)
-                
-                # face-position: Config.MQTT_SEND_INTERVAL 주기로 발행
-                if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
-                    session_id, selected_users = self.mqtt.get_current_session()
-                    selected_faces = self.tracker.get_selected_faces(selected_users)
+            try:
+                while True:
+                    current_time = time.time()
+                    frame = self.camera.get_frame()
                     
-                    for face_info in selected_faces:
-                        user_id = face_info['user_id']
-                        x, y = face_info['center']
-                        self.mqtt.publish_face_position(user_id, x, y)
+                    if frame is None:
+                        time.sleep(0.001)  # ✅ 0.01 → 0.001 (원본과 동일)
+                        continue
                     
-                    self.last_position_time = current_time
-                
-                # face-lost: Config.FACE_LOST_TIMEOUT 후 발행
-                for lost_info in lost_faces:
-                    self.mqtt.publish_face_lost(
-                        lost_info['user_id'],
-                        lost_info['duration']
+                    # Processing 해상도로 리사이즈
+                    frame_processing = cv2.resize(
+                        frame, 
+                        (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
                     )
-                    print(f"[AI] 👋 User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
                 
-                time.sleep(0.01)
-        
-        except KeyboardInterrupt:
-            print("\n[AI] Stopping...")
-        finally:
-            self.camera.stop()
-            self.mqtt.stop()
+                    # 1. MediaPipe로 얼굴 감지
+                    detected_positions = self._detect_faces(frame_processing, face_detection)
+                    
+                    # 2. 추적 업데이트
+                    updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
+                
+                    # 3. ✅ 전역 타이머로 얼굴 인식 (1초마다 모든 얼굴)
+                    force_identify = (current_time - last_global_identify_time >= self.config.FACE_ID_INTERVAL)
+                    
+                    newly_identified = self.tracker.identify_faces(
+                        self.recognizer,
+                        frame_processing,
+                        current_time,
+                        interval=self.config.FACE_ID_INTERVAL,
+                        force_all=force_identify  # ✅ 1초마다 강제 인식
+                    )
+                    
+                    if force_identify:
+                        last_global_identify_time = current_time
+                        if len(updated_ids) > 0:
+                            print(f"[DEBUG] Identifying {len(updated_ids)} faces")
+                    
+                    # face-detected
+                    for face_id, user_id, confidence in newly_identified:
+                        self.mqtt.publish_face_detected(user_id, confidence)
+                    
+                    # face-position
+                    if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
+                        session_id, selected_users = self.mqtt.get_current_session()
+                        selected_faces = self.tracker.get_selected_faces(selected_users)
+                        
+                        for face_info in selected_faces:
+                            user_id = face_info['user_id']
+                            x, y = face_info['center']
+                            self.mqtt.publish_face_position(user_id, x, y)
+                        
+                        self.last_position_time = current_time
+                    
+                    # face-lost
+                    for lost_info in lost_faces:
+                        self.mqtt.publish_face_lost(
+                            lost_info['user_id'],
+                            lost_info['duration']
+                        )
+                        print(f"[AI] 👋 User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
+                    
+                    # FPS 계산
+                    frame_count += 1
+                    if frame_count % 30 == 0:
+                        elapsed = time.time() - fps_start
+                        fps = 30 / elapsed
+                        fps_start = time.time()
+                        print(f"[INFO] FPS: {fps:.1f} | Tracked: {len(self.tracker.tracked_faces)}")
+                    
+                    time.sleep(0.001)  # ✅ 0.01 → 0.001
+            
+            except KeyboardInterrupt:
+                print("\n[AI] Stopping...")
+            finally:
+                self.camera.stop()
+                self.mqtt.stop()
 
-    def _detect_faces(self, frame_processing):
-        """MediaPipe로 얼굴 감지
-        
-        Args:
-            frame_processing: 이미 PROCESSING_WIDTH × PROCESSING_HEIGHT로 리사이즈된 프레임
-        """
+    def _detect_faces(self, frame_processing, face_detection):
+        """MediaPipe로 얼굴 감지"""
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
-        results = self.face_detection.process(rgb)
+        results = face_detection.process(rgb)
         
         detected = []
         if results.detections:
             for detection in results.detections:
                 bbox = detection.location_data.relative_bounding_box
                 
-                # processing 해상도에서 bbox 계산
                 x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH)
                 y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT)
                 x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH)
                 y2 = int((bbox.ymin + bbox.height) * self.config.PROCESSING_HEIGHT)
                 
-                # FHD 좌표로 center만 스케일링 (MQTT 전송용)
                 x_center_fhd = int((bbox.xmin + bbox.width / 2) * self.config.PROCESSING_WIDTH * self.scale_x)
                 y_center_fhd = int((bbox.ymin + bbox.height / 2) * self.config.PROCESSING_HEIGHT * self.scale_y)
                 
                 detected.append({
-                    'center': (x_center_fhd, y_center_fhd),  # FHD 좌표 (MQTT용)
-                    'bbox': (x1, y1, x2, y2)  # processing 좌표 (인식용)
+                    'center': (x_center_fhd, y_center_fhd),
+                    'bbox': (x1, y1, x2, y2)
                 })
         
         return detected
-
 
 def main():
     config = Config()
     service = AIService(config)
     service.run()
-
 
 if __name__ == '__main__':
     main()
