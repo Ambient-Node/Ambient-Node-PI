@@ -10,10 +10,6 @@ class EventHandlers:
         self.mqtt = mqtt_client
         self.current_session_id = None
         
-        # face_position 메모리 캐시
-        # {session_id: {user_id: {track_id, x, y, w, h, ts}}}
-        self.position_cache = {}
-        
         self._load_active_session()
 
     def _load_active_session(self):
@@ -188,7 +184,7 @@ class EventHandlers:
 
     def handle_angle_change(self, payload):
         """각도 변경"""
-        direction = payload.get('direction')
+        angle = payload.get('angle')
         timestamp = payload.get('timestamp')
 
         log_query = """
@@ -199,10 +195,10 @@ class EventHandlers:
         self.db.execute(log_query, (
             self.current_session_id,
             'angle_change',
-            json.dumps({"direction": direction}),
+            json.dumps({"angle": angle}),
             timestamp
         ))
-        print(f"[Handler] Angle changed: {direction}")
+        print(f"[Handler] Angle changed: {angle}")
 
     def handle_mode_change(self, payload):
         """모드 변경"""
