@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime
 
+
 class EventHandlers:
     def __init__(self, db, mqtt_client):
         self.db = db
@@ -11,6 +12,7 @@ class EventHandlers:
         self.current_session_id = None
         
         self._load_active_session()
+
 
     def _load_active_session(self):
         """DB에서 현재 활성 세션 복구"""
@@ -32,6 +34,7 @@ class EventHandlers:
         except Exception as e:
             print(f"[Handler] Failed to load active session: {e}")
 
+
     def handle_user_register(self, payload):
         """사용자 등록"""
         user_id = payload.get('user_id')
@@ -48,12 +51,12 @@ class EventHandlers:
         self.db.execute(query, (user_id, username, image_path, timestamp))
         print(f"[Handler] User registered: {username} ({user_id})")
 
-        # ACK 전송
         self.mqtt.publish("ambient/user/register-ack", {
             "user_id": user_id,
             "success": True,
             "timestamp": datetime.now().isoformat()
         })
+
 
     def handle_user_select(self, payload):
         """사용자 선택 - 세션 생성"""
@@ -86,7 +89,6 @@ class EventHandlers:
             print(f"[Handler] Session created: {session_id}")
             print(f"[Handler] Users: {user_ids}")
 
-            # AI / BLE Gateway에 브로드캐스트 (Retain)
             self.mqtt.publish("ambient/session/active", {
                 "session_id": session_id,
                 "user_list": user_list,
@@ -104,8 +106,9 @@ class EventHandlers:
                 "timestamp": timestamp
             }, qos=1, retain=True)
 
+
     def handle_session_request(self, payload):
-        """현재 활성 세션 정보 요청 처리 (AI가 재시작했을 때 등)"""
+        """현재 활성 세션 정보 요청 처리"""
         try:
             query = """
             SELECT session_id, selected_user_ids, session_start
@@ -132,14 +135,13 @@ class EventHandlers:
                     "user_list": user_list,
                     "timestamp": datetime.now().isoformat()
                 }
-                # 내부 current_session_id도 동기화
                 self.current_session_id = session_id
 
-            # 기존과 동일한 형식으로 응답
             self.mqtt.publish("ambient/session/active", resp, qos=1, retain=True)
             print(f"[Handler] Session request handled: {resp['session_id']}")
         except Exception as e:
             print(f"[Handler] Failed to handle session request: {e}")
+
 
     def handle_user_update(self, payload):
         """사용자 정보 수정"""
@@ -155,9 +157,11 @@ class EventHandlers:
         self.db.execute(query, (username, timestamp, user_id))
         print(f"[Handler] User updated: {user_id} -> {username}")
 
+
     def handle_speed_change(self, payload):
         """풍속 변경"""
         speed = payload.get('speed')
+        user_id = payload.get('user_id')  # 추가
         timestamp = payload.get('timestamp')
 
         # 1. current_status 업데이트
@@ -168,41 +172,48 @@ class EventHandlers:
         """
         self.db.execute(query, (speed, timestamp))
 
-        # 2. device_events 로그
+        # 2. device_events 로그 (user_id 추가)
         log_query = """
         INSERT INTO device_events
-        (session_id, event_type, event_data, timestamp)
-        VALUES (%s, %s, %s, %s)
+        (session_id, user_id, event_type, event_data, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
         """
         self.db.execute(log_query, (
             self.current_session_id,
+            user_id,  # 추가
             'speed_change',
             json.dumps({"speed": speed}),
             timestamp
         ))
-        print(f"[Handler] Speed changed: {speed}")
+        print(f"[Handler] Speed changed: {speed} (user: {user_id})")
+
 
     def handle_angle_change(self, payload):
         """각도 변경"""
-        angle = payload.get('angle')
+        direction = payload.get('direction')  # 'angle' → 'direction'으로 수정
+        user_id = payload.get('user_id')  # 추가
         timestamp = payload.get('timestamp')
 
+        # device_events 로그 (user_id 추가)
         log_query = """
         INSERT INTO device_events
-        (session_id, event_type, event_data, timestamp)
-        VALUES (%s, %s, %s, %s)
+        (session_id, user_id, event_type, event_data, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
         """
         self.db.execute(log_query, (
             self.current_session_id,
+            user_id,  # 추가
             'angle_change',
-            json.dumps({"angle": angle}),
+            json.dumps({"direction": direction}),
             timestamp
         ))
-        print(f"[Handler] Angle changed: {angle}")
+        print(f"[Handler] Angle changed: {direction} (user: {user_id})")
+
 
     def handle_mode_change(self, payload):
         """모드 변경"""
         mode = payload.get('mode')
+        user_id = payload.get('user_id')  # 추가
         timestamp = payload.get('timestamp')
 
         # current_status 업데이트
@@ -213,24 +224,27 @@ class EventHandlers:
         """
         self.db.execute(query, (mode, timestamp))
 
-        # 로그
+        # device_events 로그 (user_id 추가)
         log_query = """
         INSERT INTO device_events
-        (session_id, event_type, event_data, timestamp)
-        VALUES (%s, %s, %s, %s)
+        (session_id, user_id, event_type, event_data, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
         """
         self.db.execute(log_query, (
             self.current_session_id,
+            user_id,  # 추가
             'mode_change',
             json.dumps({"mode": mode}),
             timestamp
         ))
-        print(f"[Handler] Mode changed: {mode}")
+        print(f"[Handler] Mode changed: {mode} (user: {user_id})")
+
 
     def handle_face_detected(self, payload):
         """얼굴 인식"""
         session_id = payload.get('session_id')
         user_id = payload.get('user_id')
+        confidence = payload.get('confidence')
         timestamp = payload.get('timestamp')
 
         query = """
@@ -242,16 +256,17 @@ class EventHandlers:
             session_id,
             user_id,
             'face_detected',
-            json.dumps(payload),
+            json.dumps({"confidence": confidence}),
             timestamp
         ))
         print(f"[Handler] Face detected: {user_id}")
-        
+
 
     def handle_face_lost(self, payload):
         """얼굴 추적 종료"""
         session_id = payload.get('session_id')
         user_id = payload.get('user_id')
+        duration_seconds = payload.get('duration_seconds')
         timestamp = payload.get('timestamp')
 
         query = """
@@ -263,10 +278,11 @@ class EventHandlers:
             session_id,
             user_id,
             'face_lost',
-            json.dumps(payload),
+            json.dumps({"duration_seconds": duration_seconds}),
             timestamp
         ))
         print(f"[Handler] Face lost: {user_id}")
+
 
     def handle_stats_request(self, payload):
         """통계 요청 처리"""
@@ -289,7 +305,6 @@ class EventHandlers:
             else:
                 data = {"error": "Unknown stat type"}
             
-            # 응답 전송
             self.mqtt.publish("ambient/stats/response", {
                 "request_id": request_id,
                 "type": stat_type,
@@ -306,6 +321,7 @@ class EventHandlers:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             })
+
 
     def _get_usage_stats(self, period):
         """시간대별 사용량"""
@@ -338,8 +354,9 @@ class EventHandlers:
         results = self.db.fetchall()
         return [{"time": str(row[0]), "minutes": float(row[1])} for row in results]
 
+
     def _get_speed_distribution(self, period):
-        """풍속별 사용 시간 (윈도우 함수 사용)"""
+        """풍속별 사용 시간"""
         date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else \
                     "timestamp >= date_trunc('week', CURRENT_DATE)"
         
@@ -366,6 +383,7 @@ class EventHandlers:
         self.db.execute(query)
         results = self.db.fetchall()
         return [{"speed": row[0], "minutes": float(row[1])} for row in results]
+
 
     def _get_mode_ratio(self, period):
         """AI/Manual 모드 비율"""
@@ -401,8 +419,9 @@ class EventHandlers:
         return [{"mode": row[0], "hours": float(row[1]), "percentage": float(row[2])} 
                 for row in results]
 
+
     def _get_usage_pattern(self, period, user_id):
-        """사용 패턴 분석 (시간대별)"""
+        """사용 패턴 분석"""
         query = """
         SELECT 
             EXTRACT(HOUR FROM session_start) AS hour_of_day,
@@ -421,6 +440,7 @@ class EventHandlers:
         results = self.db.fetchall()
         return [{"hour": int(row[0]), "count": row[1], "avg_minutes": float(row[2])} 
                 for row in results]
+
 
     def _get_user_comparison(self, period):
         """사용자별 비교 통계"""
