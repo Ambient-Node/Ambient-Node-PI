@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE Gateway Service - 청크 파싱 버그 수정 및 안정화"""
+"""BLE Gateway Service - user_id 포함 처리"""
 
 import base64
 import os
@@ -93,7 +93,6 @@ def register_pairing_agent():
 # 이미지 저장
 # ========================================
 def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> str:
-    # 디렉토리 생성
     if not os.path.exists(save_dir):
         try:
             os.makedirs(save_dir, exist_ok=True)
@@ -103,14 +102,12 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
             return ""
     
     try:
-        # Base64 패딩 보정
         missing_padding = len(base64_str) % 4
         if missing_padding:
             base64_str += '=' * (4 - missing_padding)
         
         img_data = base64.b64decode(base64_str)
         
-        # 이미지 유효성 검증 (PIL)
         try:
             img = Image.open(io.BytesIO(img_data))
             img.verify()
@@ -120,7 +117,6 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
         
         save_path = os.path.join(save_dir, filename)
         
-        # 파일 쓰기
         with open(save_path, 'wb') as f:
             f.write(img_data)
         
@@ -137,7 +133,7 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
 # ========================================
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
-        print(f'[MQTT] ✅ Connected')
+        print(f'[MQTT] Connected')
         client.subscribe("ambient/user/register-ack")
         client.subscribe("ambient/session/active")
         client.subscribe("ambient/stats/response")
@@ -181,6 +177,20 @@ def send_notification(data: dict):
 
 
 # ========================================
+# 헬퍼 함수: selected_users에서 user_id 추출
+# ========================================
+def extract_user_id(payload: dict) -> str:
+    """
+    payload에서 selected_users 추출 후 첫 번째 사용자 user_id 반환
+    선택된 사용자가 없으면 None 반환
+    """
+    selected_users = payload.get('selected_users', [])
+    if selected_users and len(selected_users) > 0:
+        return selected_users[0].get('user_id')
+    return None
+
+
+# ========================================
 # 데이터 처리 로직
 # ========================================
 def process_complete_data(data_str):
@@ -190,7 +200,6 @@ def process_complete_data(data_str):
         payload = json.loads(data_str)
     except json.JSONDecodeError as e:
         print(f'[WARN] JSON parse error: {e}')
-        # 문제의 데이터 앞부분 확인
         print(f'[DEBUG] Raw data head: {data_str[:50]}') 
         send_notification({"type": "ERROR", "message": "Invalid JSON"})
         return
@@ -198,57 +207,114 @@ def process_complete_data(data_str):
     timestamp = datetime.now().isoformat()
     action = payload.get('action', '')
     
+    # 선택된 사용자에서 user_id 추출
+    user_id = extract_user_id(payload)
+    
     topic = None
     mqtt_payload = {}
 
     if action == 'user_register':
-        user_id = payload.get('user_id')
-        if not user_id:
-            user_id = f"user_{int(time.time())}"
+        register_user_id = payload.get('user_id')
+        if not register_user_id:
+            register_user_id = f"user_{int(time.time())}"
             
-        username = payload.get('name', 'Unknown')
+        username = payload.get('username', 'Unknown')
         base64_img = payload.get('image_base64')
         
-        print(f'[BLE] Processing registration for: {username} ({user_id})')
+        print(f'[BLE] Processing registration for: {username} ({register_user_id})')
         
         image_path = ""
         if base64_img:
-            # 이미지가 있을 때만 저장 시도
-            user_dir = os.path.join(USER_IMAGES_DIR, user_id)
-            filename = f"{user_id}.png"
+            user_dir = os.path.join(USER_IMAGES_DIR, register_user_id)
+            filename = f"{register_user_id}.png"
             image_path = save_base64_image_to_png(base64_img, user_dir, filename)
         
         topic = "ambient/user/register"
         mqtt_payload = {
-            "user_id": user_id,
+            "user_id": register_user_id,
             "username": username,
             "image_path": image_path,
             "timestamp": timestamp
         }
 
+    elif action == 'user_update':
+        update_user_id = payload.get('user_id')
+        username = payload.get('username', 'Unknown')
+        base64_img = payload.get('image_base64')
+        
+        print(f'[BLE] Processing update for: {username} ({update_user_id})')
+        
+        image_path = ""
+        if base64_img:
+            user_dir = os.path.join(USER_IMAGES_DIR, update_user_id)
+            filename = f"{update_user_id}.png"
+            image_path = save_base64_image_to_png(base64_img, user_dir, filename)
+        
+        topic = "ambient/user/update"
+        mqtt_payload = {
+            "user_id": update_user_id,
+            "username": username,
+            "image_path": image_path,
+            "timestamp": timestamp
+        }
+
+    elif action == 'user_delete':
+        delete_user_id = payload.get('user_id')
+        
+        topic = "ambient/user/delete"
+        mqtt_payload = {
+            "user_id": delete_user_id,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] User delete: {delete_user_id}')
+
     elif action == 'speed_change':
         speed = payload.get('speed', 0)
+        
         topic = "ambient/command/speed"
-        mqtt_payload = {"event_type": "speed_change", "speed": speed, "timestamp": timestamp}
-        print(f'[BLE] Speed: {speed}')
+        mqtt_payload = {
+            "event_type": "speed_change",
+            "speed": speed,
+            "user_id": user_id,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] Speed: {speed} (user: {user_id})')
 
     elif action == 'angle_change':
-        angle = payload.get('angle', 'center')
-        toggleOn = payload.get('toggleOn', 0)
+        direction = payload.get('direction', 'center')
+        toggle_on = payload.get('toggleOn', 0)
+        
         topic = "ambient/command/angle"
-        mqtt_payload = {"event_type": "angle_change", "angle": angle, "toggleOn": toggleOn, "timestamp": timestamp}
-        print(f'[BLE] Angle: {angle}')        
+        mqtt_payload = {
+            "event_type": "angle_change",
+            "direction": direction,
+            "toggleOn": toggle_on,
+            "user_id": user_id,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] Angle: {direction} (user: {user_id})')
 
     elif action == 'mode_change':
         mode = payload.get('mode', 'manual')
+        
         topic = "ambient/command/mode"
-        mqtt_payload = {"event_type": "mode_change", "mode": mode, "timestamp": timestamp}
-        print(f'[BLE] Mode: {mode}')
+        mqtt_payload = {
+            "event_type": "mode_change",
+            "mode": mode,
+            "user_id": user_id,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] Mode: {mode} (user: {user_id})')
 
     elif action == 'user_select':
-        user_list = payload.get('users', [])
+        user_list = payload.get('user_list', [])
+        
         topic = "ambient/user/select"
-        mqtt_payload = {"event_type": "user_select", "user_list": user_list, "timestamp": timestamp}
+        mqtt_payload = {
+            "event_type": "user_select",
+            "user_list": user_list,
+            "timestamp": timestamp
+        }
         print(f'[BLE] User select: {len(user_list)} users')
         
     elif action == 'shutdown':
@@ -262,8 +328,7 @@ def process_complete_data(data_str):
     if _mqtt_client and _mqtt_client.is_connected() and topic:
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
         
-        # 명령 계열은 즉시 ACK
-        if action in ['speed_change', 'mode_change', 'user_select']:
+        if action in ['speed_change', 'angle_change', 'mode_change', 'user_select']:
             send_notification({"type": "ACK", "action": action, "success": True})
 
 
@@ -276,58 +341,45 @@ def on_write_characteristic(value, options):
     try:
         data_str = bytes(value).decode('utf-8')
         
-        # 1. 청크 데이터 확인
         if data_str.startswith('<CHUNK:'):
             try:
-                # 헤더 닫는 괄호 찾기
                 tag_end = data_str.find('>')
                 if tag_end == -1:
                     return
 
-                # 헤더 내용 추출 (예: 0/378 또는 END)
-                # index 7부터 > 직전까지
                 header_content = data_str[7:tag_end]
-                
-                # [중요 수정] 데이터 추출 시 중복된 '>' 제거 로직
-                # data_str[tag_end+1:] 은 > 바로 뒷부분부터 시작
                 chunk_data = data_str[tag_end+1:]
                 
-                # 앱에서 구분자로 '>'를 하나 더 넣어서 보내는 경우 제거 (예: <...>>data)
                 if chunk_data.startswith('>'):
                     chunk_data = chunk_data[1:]
 
-                # 종료 신호 처리
                 if header_content == 'END':
                     if _chunk_buffer and all(_chunk_buffer):
-                        print(f'[BLE] ✅ End signal. Assembling {_expected_total} chunks...')
+                        print(f'[BLE] End signal. Assembling {_expected_total} chunks...')
                         complete_data = ''.join(_chunk_buffer)
                         _chunk_buffer = []
                         _expected_total = 0
                         process_complete_data(complete_data)
                     return
 
-                # 일반 청크 처리
                 if '/' in header_content:
                     idx_str, total_str = header_content.split('/')
                     current_idx = int(idx_str)
                     total_chunks = int(total_str)
                     
-                    # 버퍼 초기화
                     if _expected_total != total_chunks:
                         _expected_total = total_chunks
                         _chunk_buffer = [''] * total_chunks
 
-                    # 데이터 저장
                     if 0 <= current_idx < total_chunks:
                         _chunk_buffer[current_idx] = chunk_data
                         
                         if total_chunks > 10:
                             if current_idx % (total_chunks // 10) == 0:
-                                print(f'[BLE] 📦 Chunk {current_idx + 1}/{total_chunks}')
+                                print(f'[BLE] Chunk {current_idx + 1}/{total_chunks}')
                         else:
-                             print(f'[BLE] 📦 Chunk {current_idx + 1}/{total_chunks}')
+                             print(f'[BLE] Chunk {current_idx + 1}/{total_chunks}')
 
-                    # 자동 조립 (END 패킷이 유실되어도 동작하도록)
                     if all(_chunk_buffer):
                         print(f'[BLE] All chunks assembled (Auto).')
                         complete_data = ''.join(_chunk_buffer)
@@ -340,7 +392,6 @@ def on_write_characteristic(value, options):
                 print(f'[BLE] Chunk parse error: {ve}')
                 return
 
-        # 2. 일반 데이터
         process_complete_data(data_str)
     
     except Exception as e:
@@ -356,7 +407,6 @@ def on_read_characteristic():
 # GATT 및 광고 설정
 # ========================================
 def setup_gatt_and_advertising():
-    """GATT 서비스 및 광고 설정"""
     global _notify_char
 
     adapter_obj = peripheral.adapter.Adapter()
@@ -387,8 +437,8 @@ def setup_gatt_and_advertising():
     ad_manager = peripheral.advertisement.AdvertisingManager(adapter_obj.address)
     ad_manager.register_advertisement(advert, {})
 
-    print(f'[BLE] 📡 Advertising as "{DEVICE_NAME}"')
-    print(f'[BLE] ✅ Using adapter: {adapter_obj.address}')
+    print(f'[BLE] Advertising as "{DEVICE_NAME}"')
+    print(f'[BLE] Using adapter: {adapter_obj.address}')
     
     threading.Thread(target=lambda: app.start(), daemon=True).start()
     return ad_manager, advert, gatt_manager, app
@@ -425,4 +475,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # 수정 확인용
