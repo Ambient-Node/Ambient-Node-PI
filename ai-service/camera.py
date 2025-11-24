@@ -11,25 +11,66 @@ class CameraStream:
         self.frame_queue = deque(maxlen=1)
         self.lock = threading.Lock()
         self.running = False
+        self.cap = None  # 웹캠용
 
     def start(self):
         """카메라 스트림 시작"""
-        print(f"[Camera] Using external rpicam-vid at tcp://{self.config.TCP_IP}:{self.config.TCP_PORT}")
         self.running = True
-        threading.Thread(target=self._receive_stream, daemon=True).start()
+        
+        if self.config.CAMERA_MODE == 'webcam':
+            print(f"[Camera] Using webcam (index: {self.config.WEBCAM_INDEX})")
+            threading.Thread(target=self._webcam_stream, daemon=True).start()
+        else:  # tcp
+            print(f"[Camera] Using TCP stream at {self.config.TCP_IP}:{self.config.TCP_PORT}")
+            threading.Thread(target=self._receive_stream, daemon=True).start()
+
+    def _webcam_stream(self):
+        """웹캠에서 프레임 읽기"""
+        self.cap = cv2.VideoCapture(self.config.WEBCAM_INDEX)
+        
+        # 해상도 설정 시도
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.CAMERA_HEIGHT)
+        
+        # 실제 해상도 확인
+        actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[Camera] ✅ Webcam opened: {actual_width}x{actual_height}")
+        
+        if not self.cap.isOpened():
+            print("[Camera] ❌ Failed to open webcam")
+            self.running = False
+            return
+        
+        while self.running:
+            ret, frame = self.cap.read()
+            if not ret:
+                print("[Camera] ❌ Failed to read frame")
+                time.sleep(0.1)
+                continue
+            
+            # 해상도가 다르면 리사이즈
+            if frame.shape[1] != self.config.CAMERA_WIDTH or frame.shape[0] != self.config.CAMERA_HEIGHT:
+                frame = cv2.resize(frame, (self.config.CAMERA_WIDTH, self.config.CAMERA_HEIGHT))
+            
+            with self.lock:
+                self.frame_queue.append(frame)
+            
+            time.sleep(0.001)  # CPU 사용률 조절
+        
+        self.cap.release()
+        print("[Camera] Webcam released")
 
     def _receive_stream(self):
-        """TCP 스트림 수신 (최적화)"""
+        """TCP 스트림 수신 (라즈베리파이용)"""
         max_retries = 10
         retry_delay = 3
         
         for attempt in range(max_retries):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB 버퍼
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # 지연 최소화
-                
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.settimeout(5)
                 sock.connect((self.config.TCP_IP, self.config.TCP_PORT))
                 print(f"[Camera] ✅ Connected to {self.config.TCP_IP}:{self.config.TCP_PORT}")
@@ -44,14 +85,12 @@ class CameraStream:
                     self.running = False
                     return
         
-        sock.settimeout(None)  # 블로킹 모드
-        
+        sock.settimeout(None)
         buffer = b""
-        frame_size = self.config.CAMERA_WIDTH * self.config.CAMERA_HEIGHT * 3 // 2  # YUV420
-
+        frame_size = self.config.CAMERA_WIDTH * self.config.CAMERA_HEIGHT * 3 // 2
+        
         while self.running:
             try:
-                # ✅ 128KB씩 수신 (원본과 동일)
                 chunk = sock.recv(131072)
                 if not chunk:
                     print("[Camera] Stream ended")
@@ -60,7 +99,6 @@ class CameraStream:
                 
                 buffer += chunk
                 
-                # 프레임 완성 체크
                 while len(buffer) >= frame_size:
                     frame_data = buffer[:frame_size]
                     buffer = buffer[frame_size:]
@@ -79,16 +117,18 @@ class CameraStream:
             except Exception as e:
                 print(f"[Camera] ❌ Frame receive error: {e}")
                 break
-
+        
         sock.close()
-        print("[Camera] Receiver stopped")
+        print("[Camera] TCP receiver stopped")
 
     def get_frame(self):
-        """가장 최근 프레임 반환 (복사 없음)"""
+        """가장 최근 프레임 반환"""
         with self.lock:
             if self.frame_queue:
-                return self.frame_queue[-1]  # ✅ copy() 제거
+                return self.frame_queue[-1]
         return None
 
     def stop(self):
         self.running = False
+        if self.cap:
+            self.cap.release()
