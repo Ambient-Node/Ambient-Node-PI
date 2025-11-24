@@ -2,15 +2,11 @@
 import os
 
 class Config:
-    # 카메라 모드 선택
-    CAMERA_MODE = os.getenv('CAMERA_MODE', 'webcam')  # 'tcp' 또는 'webcam'
-    WEBCAM_INDEX = int(os.getenv('WEBCAM_INDEX', 0))  # 웹캠 번호 (0, 1, 2...)
-    
-    # TCP (라즈베리파이용)
+    # TCP
     TCP_IP = 'localhost'
     TCP_PORT = 8888
     
-    # 카메라 해상도
+    # 카메라
     CAMERA_WIDTH = 1920
     CAMERA_HEIGHT = 1080
     PROCESSING_WIDTH = 640

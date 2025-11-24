@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""AI Service - 메인 실행 파일 (시각화 추가)"""
+"""AI Service - 메인 실행 파일 (최적화)"""
 
-import os
 import time
 import cv2
 import mediapipe as mp
@@ -10,16 +9,10 @@ from camera import CameraStream
 from face_recognition import FaceRecognizer
 from face_tracker import FaceTracker
 from mqtt_client import MQTTClient
-from visualizer import FaceDetectionVisualizer
-
 
 class AIService:
     def __init__(self, config):
         self.config = config
-        
-        # 시각화 활성화 여부 (환경변수로 제어)
-        enable_display = os.getenv('ENABLE_DISPLAY', 'true').lower() == 'true'
-        self.visualizer = FaceDetectionVisualizer(enable_display=enable_display)
         
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
@@ -33,6 +26,8 @@ class AIService:
         self.mqtt.on_user_register = self.on_user_register
         self.mqtt.on_user_update = self.on_user_update
         
+        # ✅ MediaPipe는 run()에서 with문으로 생성
+        
         self.last_position_time = 0
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
@@ -41,7 +36,6 @@ class AIService:
         print(f"  - FACE_LOST_TIMEOUT: {config.FACE_LOST_TIMEOUT}s")
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
-        print(f"  - DISPLAY: {enable_display}")
 
     def on_session_update(self, session_id, user_ids):
         print(f"[AI] Session updated: {session_id}")
@@ -76,14 +70,16 @@ class AIService:
             self.recognizer.known_usernames[user_id] = username
 
     def run(self):
-        """메인 루프 (시각화 추가)"""
+        """메인 루프 (원본 스타일로 최적화)"""
         print("[AI] Service started")
         self.camera.start()
         
+        # ✅ MediaPipe context manager 사용
         with mp.solutions.face_detection.FaceDetection(
             model_selection=1, min_detection_confidence=0.3
         ) as face_detection:
             
+            # ✅ 전역 인식 타이머 (원본 방식)
             last_global_identify_time = 0
             frame_count = 0
             fps_start = time.time()
@@ -95,7 +91,7 @@ class AIService:
                     frame = self.camera.get_frame()
                     
                     if frame is None:
-                        time.sleep(0.001)
+                        time.sleep(0.001)  # ✅ 0.01 → 0.001 (원본과 동일)
                         continue
                     
                     # Processing 해상도로 리사이즈
@@ -110,7 +106,7 @@ class AIService:
                     # 2. 추적 업데이트
                     updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
                 
-                    # 3. 전역 타이머로 얼굴 인식
+                    # 3. ✅ 전역 타이머로 얼굴 인식 (1초마다 모든 얼굴)
                     force_identify = (current_time - last_global_identify_time >= self.config.FACE_ID_INTERVAL)
                     
                     newly_identified = self.tracker.identify_faces(
@@ -118,7 +114,7 @@ class AIService:
                         frame_processing,
                         current_time,
                         interval=self.config.FACE_ID_INTERVAL,
-                        force_all=force_identify
+                        force_all=force_identify  # ✅ 1초마다 강제 인식
                     )
                     
                     if force_identify:
@@ -150,22 +146,6 @@ class AIService:
                         )
                         print(f"[AI] 👋 User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
                     
-                    # ========== 시각화 추가 ==========
-                    # 4. 감지 결과를 시각화 형식으로 변환
-                    detections = self._prepare_detections_for_display()
-                    
-                    # 5. 바운딩 박스 그리기
-                    display_frame = self.visualizer.draw_face_boxes(frame_processing, detections)
-                    
-                    # 6. 화면 표시
-                    key = self.visualizer.show(display_frame)
-                    
-                    # ESC 키로 종료
-                    if key == 27:
-                        print("\n[AI] ESC pressed, stopping...")
-                        break
-                    # ==================================
-                    
                     # FPS 계산
                     frame_count += 1
                     if frame_count % 30 == 0:
@@ -174,12 +154,11 @@ class AIService:
                         fps_start = time.time()
                         print(f"[INFO] FPS: {fps:.1f} | Tracked: {len(self.tracker.tracked_faces)}")
                     
-                    time.sleep(0.001)
+                    time.sleep(0.001)  # ✅ 0.01 → 0.001
             
             except KeyboardInterrupt:
                 print("\n[AI] Stopping...")
             finally:
-                self.visualizer.close()  # 화면 닫기
                 self.camera.stop()
                 self.mqtt.stop()
 
@@ -207,36 +186,11 @@ class AIService:
                 })
         
         return detected
-    
-    def _prepare_detections_for_display(self):
-        """추적 중인 얼굴을 시각화용 형식으로 변환"""
-        detections = []
-        
-        with self.tracker.lock:
-            for fid, finfo in self.tracker.tracked_faces.items():
-                user_id = finfo.get('user_id')
-                username = self.recognizer.known_usernames.get(user_id, 'Unknown') if user_id else 'Unknown'
-                confidence = finfo.get('confidence', 0.0)
-                bbox = finfo['bbox']
-                
-                # bbox를 (x, y, w, h) 형식으로 변환
-                x1, y1, x2, y2 = bbox
-                
-                detections.append({
-                    'bbox': (x1, y1, x2 - x1, y2 - y1),  # (x, y, w, h)
-                    'user_id': user_id,
-                    'username': username,
-                    'confidence': confidence
-                })
-        
-        return detections
-
 
 def main():
     config = Config()
     service = AIService(config)
     service.run()
-
 
 if __name__ == '__main__':
     main()
