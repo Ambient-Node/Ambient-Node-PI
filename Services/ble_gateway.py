@@ -329,7 +329,7 @@ def on_write_characteristic(value, options):
 
                     # 자동 조립 (END 패킷이 유실되어도 동작하도록)
                     if all(_chunk_buffer):
-                        print(f'[BLE] ✅ All chunks assembled (Auto).')
+                        print(f'[BLE] All chunks assembled (Auto).')
                         complete_data = ''.join(_chunk_buffer)
                         _chunk_buffer = []
                         _expected_total = 0

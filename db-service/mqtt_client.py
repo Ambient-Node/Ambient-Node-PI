@@ -26,7 +26,6 @@ class MQTTClient:
             "ambient/command/angle",
             "ambient/command/mode",
             "ambient/ai/face-detected",
-            "ambient/ai/face-position",
             "ambient/ai/face-lost",
             "ambient/stats/request",
             "ambient/session/request",  # ← 추가: AI가 현재 세션 요청

@@ -42,8 +42,6 @@ class DBService:
                 self.handlers.handle_mode_change(payload)
             elif topic == "ambient/ai/face-detected":
                 self.handlers.handle_face_detected(payload)
-            elif topic == "ambient/ai/face-position":
-                self.handlers.handle_face_position(payload)
             elif topic == "ambient/ai/face-lost":
                 self.handlers.handle_face_lost(payload)
             elif topic == "ambient/stats/request":

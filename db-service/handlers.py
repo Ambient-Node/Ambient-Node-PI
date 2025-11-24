@@ -250,41 +250,6 @@ class EventHandlers:
             timestamp
         ))
         print(f"[Handler] Face detected: {user_id}")
-
-     def handle_face_position(self, payload):
-        """
-        얼굴 좌표 실시간 수신 - 메모리 캐싱만 (DB 저장 안 함)
-        세션 종료 시 마지막 좌표만 저장
-        """
-        meta = payload.get('meta', {})
-        data = payload.get('data', {})
-        
-        session_id = meta.get('session_id')
-        user_id = meta.get('user_id')
-        track_id = meta.get('track_id')
-        ts = meta.get('ts')
-        
-        x = data.get('x')
-        y = data.get('y')
-        w = data.get('w')
-        h = data.get('h')
-        
-        if not session_id or not user_id:
-            print("[Handler] face_position missing session_id or user_id")
-            return
-        
-        # 메모리 캐시 업데이트 (마지막 좌표만 유지)
-        if session_id not in self.position_cache:
-            self.position_cache[session_id] = {}
-        
-        self.position_cache[session_id][user_id] = {
-            'track_id': track_id,
-            'x': x,
-            'y': y
-        }
-        
-        # DB 저장 안 함! (로그도 너무 많아서 주석)
-        # print(f"[Handler] Position cached: {user_id} ({x}, {y})")
         
 
     def handle_face_lost(self, payload):
