@@ -188,10 +188,10 @@ class EventHandlers:
         print(f"[Handler] Speed changed: {speed} (user: {user_id})")
 
 
-    def handle_angle_change(self, payload):
+    def handle_direction_change(self, payload):
         """각도 변경"""
-        direction = payload.get('direction')  # 'angle' → 'direction'으로 수정
-        user_id = payload.get('user_id')  # 추가
+        direction = payload.get('direction')
+        user_id = payload.get('user_id') 
         timestamp = payload.get('timestamp')
 
         # device_events 로그 (user_id 추가)
@@ -203,11 +203,11 @@ class EventHandlers:
         self.db.execute(log_query, (
             self.current_session_id,
             user_id,  # 추가
-            'angle_change',
+            'direction_change',
             json.dumps({"direction": direction}),
             timestamp
         ))
-        print(f"[Handler] Angle changed: {direction} (user: {user_id})")
+        print(f"[Handler] direction changed: {direction} (user: {user_id})")
 
 
     def handle_mode_change(self, payload):

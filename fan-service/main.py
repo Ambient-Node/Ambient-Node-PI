@@ -22,10 +22,10 @@ class FanService:
             level = int(payload.get("speed", 0))
             self.hw.send_command(f"S {level}")
             
-        elif topic == "ambient/command/angle":
-            angle = payload.get("angle", "center") # direction : up, down, right, left, center -> u d r l c // toggleIsOn = true(1), false(0)
+        elif topic == "ambient/command/direction":
+            direction = payload.get("direction", "center") # direction : up, down, right, left, center -> u d r l c // toggleIsOn = true(1), false(0)
             toggleOn = payload.get("toggleOn", 0)
-            self.hw.send_command(f"A {angle} {toggleOn}")
+            self.hw.send_command(f"A {direction} {toggleOn}")
             
         elif topic == "ambient/ai/face-position":
             user_id = payload.get("user_id")

@@ -36,8 +36,8 @@ class DBService:
                 self.handlers.handle_user_update(payload)
             elif topic == "ambient/command/speed":
                 self.handlers.handle_speed_change(payload)
-            elif topic == "ambient/command/angle":
-                self.handlers.handle_angle_change(payload)
+            elif topic == "ambient/command/direction":
+                self.handlers.handle_direction_change(payload)
             elif topic == "ambient/command/mode":
                 self.handlers.handle_mode_change(payload)
             elif topic == "ambient/ai/face-detected":

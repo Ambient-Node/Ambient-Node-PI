@@ -278,19 +278,19 @@ def process_complete_data(data_str):
         }
         print(f'[BLE] Speed: {speed} (user: {user_id})')
 
-    elif action == 'angle_change':
+    elif action == 'direction_change':
         direction = payload.get('direction', 'center')
         toggle_on = payload.get('toggleOn', 0)
         
-        topic = "ambient/command/angle"
+        topic = "ambient/command/direction"
         mqtt_payload = {
-            "event_type": "angle_change",
+            "event_type": "direction_change",
             "direction": direction,
             "toggleOn": toggle_on,
             "user_id": user_id,
             "timestamp": timestamp
         }
-        print(f'[BLE] Angle: {direction} (user: {user_id})')
+        print(f'[BLE] direction: {direction} (user: {user_id})')
 
     elif action == 'mode_change':
         mode = payload.get('mode', 'manual')
@@ -300,7 +300,7 @@ def process_complete_data(data_str):
             "event_type": "mode_change",
             "mode": mode,
             "user_id": user_id,
-            "timestamp": timestamp
+            "timestamp": d
         }
         print(f'[BLE] Mode: {mode} (user: {user_id})')
 
@@ -330,7 +330,7 @@ def process_complete_data(data_str):
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
         print(f'[MQTT] Published to {topic}: {mqtt_payload}')
         
-        if action in ['speed_change', 'angle_change', 'mode_change', 'user_select']:
+        if action in ['speed_change', 'direction_change', 'mode_change', 'user_select']:
             send_notification({"type": "ACK", "action": action, "success": True})
 
 # ========================================
