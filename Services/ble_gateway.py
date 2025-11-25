@@ -272,7 +272,7 @@ def process_complete_data(data_str):
         print(f'[BLE] direction: {direction} (user: {user_id})')
 
     elif action == 'mode_change':
-        mode = payload.get('mode', 'manual')
+        mode = payload.get('mode', 'manual_control') # ai_tracking(얼굴추적), rotation(좌우회전), manual_control(수동제어), natural_wind(자연풍)
         
         topic = "ambient/command/mode"
         mqtt_payload = {
