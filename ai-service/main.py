@@ -19,14 +19,16 @@ class AIService:
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
+            # enable_display=True 얼굴 인식 정확도 display.
         )
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
         
         self.mqtt.on_session_update = self.on_session_update
         self.mqtt.on_user_register = self.on_user_register
         self.mqtt.on_user_update = self.on_user_update
+        self.mqtt.on_mode_change = self.on_mode_change
         
-        # ✅ MediaPipe는 run()에서 with문으로 생성
+        self.current_mode = "manual_control"
         
         self.last_position_time = 0
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
@@ -37,6 +39,15 @@ class AIService:
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
+    def on_mode_change(self, mode):
+        print(f"[AI] Mode switched: {self.current_mode} -> {mode}")
+        self.current_mode = mode
+
+        # 트래킹 모드가 꺼지면 트래커 상태 초기화 (선택 사항)
+        if mode != 'ai_tracking':
+            print("[AI] Tracking stopped. Resetting tracker...")
+            self.tracker.reset()
+        
     def on_session_update(self, session_id, user_ids):
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
@@ -70,16 +81,13 @@ class AIService:
             self.recognizer.known_usernames[user_id] = username
 
     def run(self):
-        """메인 루프 (원본 스타일로 최적화)"""
         print("[AI] Service started")
         self.camera.start()
         
-        # ✅ MediaPipe context manager 사용
         with mp.solutions.face_detection.FaceDetection(
             model_selection=1, min_detection_confidence=0.3
         ) as face_detection:
             
-            # ✅ 전역 인식 타이머 (원본 방식)
             last_global_identify_time = 0
             frame_count = 0
             fps_start = time.time()
@@ -87,26 +95,26 @@ class AIService:
             
             try:
                 while True:
+                    if self.current_mode != 'ai_tracking':
+                        time.sleep(1.0)
+                        continue
+                    
                     current_time = time.time()
                     frame = self.camera.get_frame()
                     
                     if frame is None:
-                        time.sleep(0.001)  # ✅ 0.01 → 0.001 (원본과 동일)
+                        time.sleep(0.001)
                         continue
                     
-                    # Processing 해상도로 리사이즈
                     frame_processing = cv2.resize(
                         frame, 
                         (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
                     )
-                
-                    # 1. MediaPipe로 얼굴 감지
+
                     detected_positions = self._detect_faces(frame_processing, face_detection)
                     
-                    # 2. 추적 업데이트
                     updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
                 
-                    # 3. ✅ 전역 타이머로 얼굴 인식 (1초마다 모든 얼굴)
                     force_identify = (current_time - last_global_identify_time >= self.config.FACE_ID_INTERVAL)
                     
                     newly_identified = self.tracker.identify_faces(
@@ -114,7 +122,7 @@ class AIService:
                         frame_processing,
                         current_time,
                         interval=self.config.FACE_ID_INTERVAL,
-                        force_all=force_identify  # ✅ 1초마다 강제 인식
+                        force_all=force_identify
                     )
                     
                     if force_identify:
@@ -122,11 +130,9 @@ class AIService:
                         if len(updated_ids) > 0:
                             print(f"[DEBUG] Identifying {len(updated_ids)} faces")
                     
-                    # face-detected
                     for face_id, user_id, confidence in newly_identified:
                         self.mqtt.publish_face_detected(user_id, confidence)
                     
-                    # face-position
                     if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
                         session_id, selected_users = self.mqtt.get_current_session()
                         selected_faces = self.tracker.get_selected_faces(selected_users)
@@ -138,13 +144,12 @@ class AIService:
                         
                         self.last_position_time = current_time
                     
-                    # face-lost
                     for lost_info in lost_faces:
                         self.mqtt.publish_face_lost(
                             lost_info['user_id'],
                             lost_info['duration']
                         )
-                        print(f"[AI] 👋 User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
+                        print(f"[AI] User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
                     
                     # FPS 계산
                     frame_count += 1
@@ -154,7 +159,7 @@ class AIService:
                         fps_start = time.time()
                         print(f"[INFO] FPS: {fps:.1f} | Tracked: {len(self.tracker.tracked_faces)}")
                     
-                    time.sleep(0.001)  # ✅ 0.01 → 0.001
+                    time.sleep(0.001)
             
             except KeyboardInterrupt:
                 print("\n[AI] Stopping...")
@@ -163,7 +168,6 @@ class AIService:
                 self.mqtt.stop()
 
     def _detect_faces(self, frame_processing, face_detection):
-        """MediaPipe로 얼굴 감지"""
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
         results = face_detection.process(rgb)
         

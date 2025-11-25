@@ -37,15 +37,14 @@ class MQTTClient:
             "ambient/user/register",
             "ambient/user/update",   
             "ambient/user/select",
-            "ambient/session/active"
+            "ambient/session/active",
+            "ambient/command/mode"
         ]
         
         for topic in topics:
             client.subscribe(topic)
         
         print(f"[MQTT] Subscribed to {len(topics)} topics")
-        
-        # 재시작 시 활성 세션 요청
         self._request_active_session()
 
     def _request_active_session(self):
@@ -102,6 +101,12 @@ class MQTTClient:
                     self.on_user_update(payload)
                 else:
                     print("[MQTT] on_user_update callback not set")
+            
+            elif msg.topic == "ambient/command/mode":
+                mode = payload.get('mode')
+                print(f"[MQTT] Mode changed: {mode}")
+                if self.on_mode_change:
+                    self.on_mode_change(mode)
                     
         except Exception as e:
             print(f"[MQTT] Error: {e}")

@@ -14,10 +14,8 @@ class FanService:
         self.running = True
         self.tracked_positions = {}
         
-        # [추가] 현재 모드 관리 (기본값: 수동)
         self.current_mode = "manual_control"
         
-        # 타이머 관리
         self.shutdown_timer = None
         
         self.hw = FanHardware(config, self.on_arduino_status)
@@ -84,7 +82,7 @@ class FanService:
             toggleOn = payload.get("toggleOn", 0)
             self.hw.send_command(f"A {direction} {toggleOn}")
         
-        # 4. 타이머 설정
+        # 4. 타이머 설정 -> 시간 지나면 mode = manual로 초기화하고 speed도 0이 되게 보내야 함!
         elif topic == "ambient/command/timer":
             try:
                 duration_sec = float(payload.get("duration_sec", 0))
@@ -129,45 +127,25 @@ class FanService:
                     self._send_positions()
 
     def _effect_loop(self):
-        """모드에 따른 지속적인 효과(자연풍 등)를 처리하는 루프"""
-        rotation_dir = 'left'
-        
         while self.effect_running:
             try:
                 # 자연풍 3~6초마다 바람 세기 랜덤하게 변경
                 if self.current_mode == "natural_wind":
-                    new_speed = random.randint(1, 2)
+                    new_speed = 1.5
                     self.hw.send_command(f"S {new_speed}")
-                    time.sleep(random.uniform(3.0, 6.0))
-                
-                elif self.current_mode == "rotation":
-                    if rotation_dir == 'left':
-                        self.hw.send_command("A l 1")
-                        print("[FAN] ↺ Rotating Left")
-                    else:
-                        self.hw.send_command("A r 1")
-                        print("[FAN] ↻ Rotating Right")
-                    
-                    for _ in range(20):
-                        if self.current_mode != "rotation": break # 모드 바뀌면 즉시 중단
-                        time.sleep(0.1)
-
-                    self.hw.send_command("A l 0")
-                    self.hw.send_command("A r 0")
-
                     time.sleep(0.5)
-
-                    rotation_dir = 'right' if rotation_dir == 'left' else 'left'
-                    
-                else:
-                    time.sleep(0.2)
+                
+                # 써큘레이터 역할. 360도 도는
+                elif self.current_mode == "rotation":
+                    self.hw.send_command(f"R")
+                    time.sleep(0.5)
                     
             except Exception as e:
                 print(f"[FAN] Effect loop error: {e}")
                 time.sleep(1)
 
     def _execute_timer_shutdown(self):
-        print("[FAN] ⏰ Timer finished! Sending S 0 (Turn Off)")
+        print("[FAN] Timer finished! Sending S 0 (Turn Off)")
         self.hw.send_command("S 0")
         self.shutdown_timer = None
 
