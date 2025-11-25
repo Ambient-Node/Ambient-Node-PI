@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE Gateway Service - user_id 포함 처리"""
+"""BLE Gateway Service - user_list 처리"""
 
 import base64
 import os
@@ -52,7 +52,6 @@ _expected_total = 0
 # 이미지 저장 경로
 USER_IMAGES_DIR = "/var/lib/ambient-node/users"
 
-
 # ========================================
 # Pairing Agent
 # ========================================
@@ -87,7 +86,6 @@ def register_pairing_agent():
     manager.RegisterAgent(_agent_path, 'NoInputNoOutput')
     manager.RequestDefaultAgent(_agent_path)
     return agent
-
 
 # ========================================
 # 이미지 저장
@@ -126,7 +124,6 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
     except Exception as e:
         print(f"[IMAGE] Save processing error: {e}")
         return ""
-
 
 # ========================================
 # MQTT 핸들러
@@ -168,27 +165,28 @@ def on_mqtt_message(client, userdata, msg):
 
 def send_notification(data: dict):
     global _notify_char
-    if _notify_char:
+    if _notify_char and data:
         try:
             payload = json.dumps(data)
             _notify_char.set_value(payload.encode('utf-8'))
+            print(f'[BLE] Notification sent: {payload}')
         except Exception as e:
             print(f"[BLE] Notify error: {e}")
 
-
 # ========================================
-# 헬퍼 함수: selected_users에서 user_id 추출
+# ✅ 수정: user_list에서 user_id 추출
 # ========================================
 def extract_user_id(payload: dict) -> str:
     """
-    payload에서 selected_users 추출 후 첫 번째 사용자 user_id 반환
+    payload에서 user_list 추출 후 첫 번째 사용자 user_id 반환
     선택된 사용자가 없으면 None 반환
     """
-    selected_users = payload.get('selected_users', [])
-    if selected_users and len(selected_users) > 0:
-        return selected_users[0].get('user_id')
+    user_list = payload.get('user_list', [])
+    if user_list and len(user_list) > 0:
+        user_id = user_list[0].get('user_id')
+        print(f'[BLE] Extracted user_id: {user_id} from user_list')
+        return user_id
     return None
-
 
 # ========================================
 # 데이터 처리 로직
@@ -207,7 +205,7 @@ def process_complete_data(data_str):
     timestamp = datetime.now().isoformat()
     action = payload.get('action', '')
     
-    # 선택된 사용자에서 user_id 추출
+    # ✅ 수정: user_list에서 user_id 추출
     user_id = extract_user_id(payload)
     
     topic = None
@@ -316,6 +314,9 @@ def process_complete_data(data_str):
             "timestamp": timestamp
         }
         print(f'[BLE] User select: {len(user_list)} users')
+        # ✅ 디버깅: user_list 내용 출력
+        if user_list:
+            print(f'[BLE] User list details: {user_list}')
         
     elif action == 'shutdown':
         os.system('sudo shutdown -h now')
@@ -327,10 +328,10 @@ def process_complete_data(data_str):
     # MQTT Publish
     if _mqtt_client and _mqtt_client.is_connected() and topic:
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
+        print(f'[MQTT] Published to {topic}: {mqtt_payload}')
         
         if action in ['speed_change', 'angle_change', 'mode_change', 'user_select']:
             send_notification({"type": "ACK", "action": action, "success": True})
-
 
 # ========================================
 # BLE Write 수신
@@ -398,10 +399,10 @@ def on_write_characteristic(value, options):
         print(f'[BLE] Write error: {e}')
         send_notification({"type": "ERROR", "message": str(e)})
 
-
 def on_read_characteristic():
-    return json.dumps({"status": "connected"}).encode('utf-8')
-
+    # ✅ 수정: 빈 응답 방지
+    result = {"status": "connected"}
+    return json.dumps(result).encode('utf-8')
 
 # ========================================
 # GATT 및 광고 설정
@@ -442,7 +443,6 @@ def setup_gatt_and_advertising():
     
     threading.Thread(target=lambda: app.start(), daemon=True).start()
     return ad_manager, advert, gatt_manager, app
-
 
 # ========================================
 # 메인 실행
