@@ -35,6 +35,15 @@ class Database:
 
     def init_tables(self):
         """필요한 테이블/인덱스 초기화"""
+        
+        # 1. 기존의 엄격한 제약조건(CHECK) 삭제 (이미 테이블이 생성된 경우 에러 해결용)
+        try:
+            self.execute("ALTER TABLE current_status DROP CONSTRAINT IF EXISTS current_status_rotation_mode_check")
+            # self.conn.commit() # execute 내부에서 commit 함
+            print("[DB] Removed legacy constraint 'current_status_rotation_mode_check'")
+        except Exception as e:
+            print(f"[DB] Note: Could not drop constraint (might not exist): {e}")
+
         queries = [
             # users
             """
@@ -68,12 +77,12 @@ class Database:
             )
             """,
             # current_status (싱글톤)
+            # [수정] CHECK 제약조건 삭제 (모든 문자열 허용)
             """
             CREATE TABLE IF NOT EXISTS current_status (
                 id INT PRIMARY KEY DEFAULT 1,
                 fan_speed INT DEFAULT 0 CHECK (fan_speed BETWEEN 0 AND 5),
-                rotation_mode VARCHAR(20) DEFAULT 'manual'
-                    CHECK (rotation_mode IN ('manual','ai')),
+                rotation_mode VARCHAR(50) DEFAULT 'manual',
                 last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT single_row CHECK (id = 1)
             )

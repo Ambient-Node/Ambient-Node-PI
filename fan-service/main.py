@@ -14,11 +14,11 @@ class FanService:
         self.running = True
         self.tracked_positions = {}
         
-        self.current_mode = "manual_control"
+        self.movement_mode = "manual_control" # motor: ai_tracking, rotation, manual_control
+        self.is_natural_wind = False          # wind: True(natural), False(normal)
         
         # 타이머 관리
         self.shutdown_timer = None
-        
         self.hw = FanHardware(config, self.on_arduino_status)
         self.mqtt = FanMQTTClient(config, self.handle_mqtt_message)
 
@@ -28,54 +28,57 @@ class FanService:
         self.effect_thread.start()
     
     def handle_mqtt_message(self, topic: str, payload: dict):
-        print(f"[MQTT] {topic}: {payload}")
+        print(f"[MQTT] 📥 {topic}: {payload}")
         
+        # 1. 모드 변경 (여기서 type을 확인합니다!)
         if topic == "ambient/command/mode":
-            new_mode = payload.get("mode")
+            cmd_type = payload.get("type") # 'motor' or 'wind'
+            mode = payload.get("mode")
             
-            if self.current_mode != new_mode:
-                print(f"[FAN] 모드 바뀌기 전 모든 동작 정지")
-                # 회전/방향 모터 정지 (좌, 우, 상, 하, 센터 모두 0)
-                # 하드웨어 구현에 따라 'A c 0' 하나로 다 멈추는게 가장 좋음
-                self.hw.send_command("A l 0")
-                self.hw.send_command("A r 0")
-                self.hw.send_command("A u 0")
-                self.hw.send_command("A d 0")
-                
-                # AI 트래킹 정지
-                self.hw.send_command("P X")
-
-            print(f"[FAN] Mode switched: {self.current_mode} -> {new_mode}")
-            self.current_mode = new_mode            
+            # [Case A] 모터(움직임) 관련 명령
+            if cmd_type == "motor":
+                if self.movement_mode != mode:
+                    print(f"[FAN] 🔄 Movement Change: {self.movement_mode} -> {mode}")
+                    
+                    # 1) 기존 움직임 정리 (Safety)
+                    self.hw.send_command("A l 0") 
+                    self.hw.send_command("A r 0")
+                    self.hw.send_command("P X") # 트래킹 정지
+                    
+                    # 2) 상태 업데이트
+                    self.movement_mode = mode
             
-            # 모드 전환 시 초기화 작업
-            if new_mode == "manual_control":
-                # 트래킹/회전 멈춤 (필요 시 하드웨어 정지 명령 전송)
-                self.hw.send_command("P X")
-            elif new_mode == "ai_tracking":
-                pass
-            elif new_mode == "natural_wind":
-                pass
-            elif new_mode == "rotation":
-                # 하드웨어에 자동 회전 기능이 있다면 여기서 명령 전송
-                # 예: self.hw.send_command("A AUTO 1")
-                pass
+            # [Case B] 바람(풍질) 관련 명령
+            elif cmd_type == "wind":
+                if mode == "natural_wind":
+                    self.is_natural_wind = True
+                    print("[FAN] 🍃 Natural Wind ON")
+                else:
+                    self.is_natural_wind = False
+                    print("[FAN] 🍃 Natural Wind OFF")
 
         # 2. 속도 제어
         elif topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
-            if self.current_mode == "natural_wind":
-                print("[FAN] Speed changed manually. Switching to manual_control.")
-                self.current_mode = "manual_control"
+            
+            # 속도를 수동으로 바꾸면 자연풍은 끄는 게 좋음
+            if self.is_natural_wind:
+                self.is_natural_wind = False
+                print("[FAN] Speed set manually. Natural wind OFF.")
             
             self.hw.send_command(f"S {level}")
             
         # 3. 방향 제어 (수동 조작)
         elif topic == "ambient/command/direction":
-            # [중요] 수동으로 방향을 조작하면 무조건 Manual 모드로 전환
-            if self.current_mode != "manual_control":
-                print("[FAN] Manual override detected. Switching to manual_control.")
-                self.current_mode = "manual_control"
+            # 수동 조작 시 '움직임'은 Manual로 변경
+            if self.movement_mode != "manual_control":
+                print("[FAN] Manual override. Switching movement to manual.")
+                self.movement_mode = "manual_control"
+                
+                # 기존 자동 동작 정지
+                self.hw.send_command("P X")
+                self.hw.send_command("A l 0")
+                self.hw.send_command("A r 0")
             
             direction = payload.get("direction", "center") 
             toggleOn = payload.get("toggleOn", 0)
@@ -104,40 +107,54 @@ class FanService:
             
         # 5. AI 얼굴 좌표 수신
         elif topic == "ambient/ai/face-position":
-            # AI Tracking 모드일 때만 좌표 처리
-            if self.current_mode == "ai_tracking":
+            # 움직임 모드가 AI일 때만 작동
+            if self.movement_mode == "ai_tracking":
                 user_id = payload.get("user_id")
                 x = payload.get("x")
                 y = payload.get("y")
-                if user_id is not None and x is not None and y is not None:
+                if user_id and x is not None and y is not None:
                     self.tracked_positions[user_id] = (x, y)
                     self._send_positions()
 
         # 6. AI 얼굴 소실
         elif topic == "ambient/ai/face-lost":
-            # 얼굴 소실 처리는 모드와 상관없이 DB를 위해 실행
             user_id = payload.get("user_id")
             if user_id in self.tracked_positions:
                 del self.tracked_positions[user_id]
-                print(f"[FAN] User lost: {user_id}")
-                
-                # 트래킹 모드일 때만 멈춤 명령 전송
-                if self.current_mode == "ai_tracking":
+                if self.movement_mode == "ai_tracking":
                     self._send_positions()
 
     def _effect_loop(self):
+        """자연풍과 자동회전을 동시에 처리하는 루프"""
+        
+        # 타이머 변수들
+        last_wind_time = 0
+        last_rotate_time = 0
+        
+        # 회전 상태
+        rotation_dir = 'r' # r 또는 l
+        
         while self.effect_running:
             try:
-                # 자연풍 3~6초마다 바람 세기 랜덤 변경
-                if self.current_mode == "natural_wind":
-                    new_speed = 1.5
-                    self.hw.send_command(f"S {new_speed}")
-                    time.sleep(0.5)
+                now = time.time()
                 
-                # 써큘레이터 역할. 360도 도는
-                elif self.current_mode == "rotation":
-                    self.hw.send_command(f"R")
-                    time.sleep(0.5)
+                # 1. 자연풍 처리 (is_natural_wind가 True일 때만)
+                if self.is_natural_wind:
+                    if now - last_wind_time > 5.0: # 5초 간격
+                        new_speed = random.randint(1, 3)
+                        self.hw.send_command(f"S {new_speed}")
+                        last_wind_time = now
+                
+                # 2. 자동 회전 처리 (movement_mode가 rotation일 때만)
+                if self.movement_mode == "rotation":
+                    if now - last_rotate_time > 3.0: # 3초 간격
+                        # 정지 -> 방향전환 -> 가동
+                        self.hw.send_command(f"A {rotation_dir} 0")
+                        rotation_dir = 'l' if rotation_dir == 'r' else 'r'
+                        self.hw.send_command(f"A {rotation_dir} 1")
+                        last_rotate_time = now
+                
+                time.sleep(0.1)
                     
             except Exception as e:
                 print(f"[FAN] Effect loop error: {e}")
