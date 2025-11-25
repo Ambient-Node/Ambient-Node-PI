@@ -25,6 +25,7 @@ class MQTTClient:
             "ambient/command/speed",
             "ambient/command/direction",
             "ambient/command/mode",
+            "ambient/command/timer",
             "ambient/ai/face-detected",
             "ambient/ai/face-lost",
             "ambient/stats/request",

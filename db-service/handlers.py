@@ -191,7 +191,7 @@ class EventHandlers:
     def handle_direction_change(self, payload):
         """각도 변경"""
         direction = payload.get('direction')
-        user_id = payload.get('user_id') 
+        user_id = payload.get('user_id')
         timestamp = payload.get('timestamp')
 
         # device_events 로그 (user_id 추가)
@@ -238,6 +238,30 @@ class EventHandlers:
             timestamp
         ))
         print(f"[Handler] Mode changed: {mode} (user: {user_id})")
+        
+    def handle_timer_set(self, payload):
+        """타이머 설정 기록"""
+        duration_sec = payload.get('duration_sec')
+        user_id = payload.get('user_id')
+        timestamp = payload.get('timestamp')
+
+        # device_events 로그 기록
+        # event_type: 'timer'
+        # event_data: {"duration_sec": 3600}
+        log_query = """
+        INSERT INTO device_events
+        (session_id, user_id, event_type, event_data, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        self.db.execute(log_query, (
+            self.current_session_id,
+            user_id,
+            'timer',
+            json.dumps({"duration_sec": duration_sec}),
+            timestamp
+        ))
+        print(f"[Handler] Timer set: {duration_sec}s (user: {user_id})")
+
 
 
     def handle_face_detected(self, payload):

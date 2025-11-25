@@ -40,6 +40,8 @@ class DBService:
                 self.handlers.handle_direction_change(payload)
             elif topic == "ambient/command/mode":
                 self.handlers.handle_mode_change(payload)
+            elif topic == "ambient/command/timer":
+                self.handlers.handle_timer_set(payload)
             elif topic == "ambient/ai/face-detected":
                 self.handlers.handle_face_detected(payload)
             elif topic == "ambient/ai/face-lost":
