@@ -420,21 +420,44 @@ def setup_gatt_and_advertising():
 
 def main():
     global _mqtt_client
+    
     print("=" * 60); print("BLE Gateway Service Starting..."); print("=" * 60)
-    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+    
+    def shutdown_handler(signum, frame):
+        print(f"[SYSTEM] Caught signal {signum}, shutting down...")
+        sys.exit(0)
+
+    # SIGINT(Ctrl+C)와 SIGTERM(systemctl) 시 app에게 알려주기 위함
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    
     agent = register_pairing_agent()
+    
     _mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     _mqtt_client.on_connect = on_mqtt_connect
     _mqtt_client.on_message = on_mqtt_message
     _mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
     _mqtt_client.loop_start()
+    
     try:
         ad_manager, advert, gatt_manager, app = setup_gatt_and_advertising()
         GLib.MainLoop().run()
+        
+    except (KeyboardInterrupt, SystemExit):
+        pass
+        
     finally:
+        print("[BLE] Sending shutdown signal to App...")
+        
+        # 앱에게 종료 알림 전송
+        send_notification({"type": "SHUTDOWN", "message": "System halting"}) 
+        time.sleep(0.5)
+        
         if _mqtt_client:
             _mqtt_client.loop_stop()
             _mqtt_client.disconnect()
+        
+        print("[BLE] Service Stopped Gracefully.")
 
 if __name__ == '__main__':
     main()
