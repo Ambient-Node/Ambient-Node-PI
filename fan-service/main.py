@@ -16,6 +16,7 @@ class FanService:
         
         self.current_mode = "manual_control"
         
+        # 타이머 관리
         self.shutdown_timer = None
         
         self.hw = FanHardware(config, self.on_arduino_status)
@@ -57,14 +58,12 @@ class FanService:
                 pass
             elif new_mode == "rotation":
                 # 하드웨어에 자동 회전 기능이 있다면 여기서 명령 전송
-                # 예: self.hw.send_command("A AUTO 1") 
+                # 예: self.hw.send_command("A AUTO 1")
                 pass
 
         # 2. 속도 제어
         elif topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
-            # 자연풍일 때 속도 조절이 들어오면 -> 수동 모드로 변경할지, 자연풍 유지할지는 기획에 따라 결정
-            # 여기서는 사용자가 속도를 바꿨으므로 Manual로 전환 (일반적인 선풍기 로직)
             if self.current_mode == "natural_wind":
                 print("[FAN] Speed changed manually. Switching to manual_control.")
                 self.current_mode = "manual_control"
@@ -82,7 +81,7 @@ class FanService:
             toggleOn = payload.get("toggleOn", 0)
             self.hw.send_command(f"A {direction} {toggleOn}")
         
-        # 4. 타이머 설정 -> 시간 지나면 mode = manual로 초기화하고 speed도 0이 되게 보내야 함!
+        # 4. 타이머 설정
         elif topic == "ambient/command/timer":
             try:
                 duration_sec = float(payload.get("duration_sec", 0))
@@ -105,7 +104,7 @@ class FanService:
             
         # 5. AI 얼굴 좌표 수신
         elif topic == "ambient/ai/face-position":
-            # [중요] AI Tracking 모드일 때만 좌표 처리
+            # AI Tracking 모드일 때만 좌표 처리
             if self.current_mode == "ai_tracking":
                 user_id = payload.get("user_id")
                 x = payload.get("x")
@@ -116,7 +115,7 @@ class FanService:
 
         # 6. AI 얼굴 소실
         elif topic == "ambient/ai/face-lost":
-            # 얼굴 소실 처리는 모드와 상관없이 추적 리스트 정리를 위해 실행
+            # 얼굴 소실 처리는 모드와 상관없이 DB를 위해 실행
             user_id = payload.get("user_id")
             if user_id in self.tracked_positions:
                 del self.tracked_positions[user_id]
@@ -129,7 +128,7 @@ class FanService:
     def _effect_loop(self):
         while self.effect_running:
             try:
-                # 자연풍 3~6초마다 바람 세기 랜덤하게 변경
+                # 자연풍 3~6초마다 바람 세기 랜덤 변경
                 if self.current_mode == "natural_wind":
                     new_speed = 1.5
                     self.hw.send_command(f"S {new_speed}")
