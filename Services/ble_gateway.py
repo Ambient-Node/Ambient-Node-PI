@@ -279,9 +279,21 @@ def process_complete_data(data_str):
             "event_type": "mode_change",
             "mode": mode,
             "user_id": user_id,
-            "timestamp": d
+            "timestamp": timestamp
         }
         print(f'[BLE] Mode: {mode} (user: {user_id})')
+        
+    elif action == 'timer':
+        duration_sec = payload.get('duration_sec', 0)
+        
+        topic = "ambient/command/timer"
+        mqtt_payload = {
+            "event_type": "timer",
+            "duration_sec": duration_sec,
+            "user_id": user_id,
+            "timestamp": timestamp
+        }
+        print(f'[BLE] User select: {len(user_id)}')
 
     elif action == 'user_select':
         user_list = payload.get('user_list', [])
@@ -293,6 +305,8 @@ def process_complete_data(data_str):
             "timestamp": timestamp
         }
         print(f'[BLE] User select: {len(user_list)} users')
+        
+    
         
     elif action == 'shutdown':
         os.system('sudo shutdown -h now')
