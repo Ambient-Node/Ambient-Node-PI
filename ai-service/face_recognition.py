@@ -66,11 +66,20 @@ class FaceRecognizer:
         print(f"[FaceRec] Loaded {len(self.known_user_ids)} users")
 
     def get_embedding(self, face_img):
-        """얼굴 이미지 → 임베딩"""
-        # 이미지가 비어있는지 확인
+        """얼굴 이미지 → 임베딩 (전처리 강화)"""
         if face_img is None or face_img.size == 0:
             raise ValueError("Input image is empty")
-
+        
+        lab = cv2.cvtColor(face_img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        l = clahe.apply(l)
+        face_img = cv2.merge([l, a, b])
+        face_img = cv2.cvtColor(face_img, cv2.COLOR_LAB2BGR)
+        
+        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        face_img = cv2.filter2D(face_img, -1, kernel)
+        
         img = cv2.resize(face_img, tuple(self.input_shape))
         img = img.astype(np.float32)
         img = (img - 127.5) / 128.0
@@ -80,23 +89,22 @@ class FaceRecognizer:
         self.interpreter.invoke()
         
         return self.interpreter.get_tensor(self.output_details[0]['index'])[0]
+
     
     def register_user(self, user_id, username, image_path):
         """이미지 파일에서 임베딩을 추출하여 저장"""
         try:
-            print(f"[FaceRec] Registering user: {username} ({user_id})")
-            print(f"[FaceRec] Reading image from: {image_path}")
-
-            # 1. 이미지 로드
-            if not os.path.exists(image_path):
-                print(f"[FaceRec] Image file not found: {image_path}")
-                return False
-
             img = cv2.imread(image_path)
             if img is None:
-                print(f"[FaceRec] Failed to load image (cv2.imread returned None)")
                 return False
-
+            
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            l = clahe.apply(l)
+            img = cv2.merge([l, a, b])
+            img = cv2.cvtColor(img, cv2.COLOR_LAB2BGR)
+            
             embedding = self.get_embedding(img)
 
             # 3. 폴더 생성 (ble_gateway가 만들었겠지만 확실하게)
@@ -134,7 +142,6 @@ class FaceRecognizer:
             return False
         
     def recognize(self, face_crop):
-        """얼굴 인식 (user_id, confidence)"""
         if not self.known_embeddings:
             return None, 0.0
         
@@ -143,10 +150,17 @@ class FaceRecognizer:
         best_idx = int(np.argmax(sims))
         best_sim = sims[best_idx]
         
+        sorted_sims = sorted(sims, reverse=True)
+        if len(sorted_sims) > 1:
+            margin = sorted_sims[0] - sorted_sims[1]
+            if margin < 0.05:  # 차이 5% 미만이면 불확실
+                return None, 0.0
+        
         if best_sim > self.threshold:
             return self.known_user_ids[best_idx], best_sim
         
         return None, 0.0
+
     
     def reload_embeddings(self):
         """새 사용자 등록 시 임베딩 재로드"""

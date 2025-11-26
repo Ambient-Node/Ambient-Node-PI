@@ -1,3 +1,4 @@
+
 """설정 관리"""
 import os
 
@@ -11,7 +12,7 @@ class Config:
     CAMERA_HEIGHT = 1080
     PROCESSING_WIDTH = 640
     PROCESSING_HEIGHT = 360
-    
+                                                                                      
     # 타이밍
     MQTT_SEND_INTERVAL = 0.1
     FACE_ID_INTERVAL = 1.0
@@ -19,7 +20,7 @@ class Config:
     
     # 얼굴 감지
     MIN_FACE_SIZE = 800
-    SIMILARITY_THRESHOLD = 0.3
+    SIMILARITY_THRESHOLD = 0.4
     MAX_MATCH_DISTANCE = 300
     
     # 경로

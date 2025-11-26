@@ -84,12 +84,9 @@ class FaceTracker:
         
         return lost_faces
 
+    # face_tracker.py - identify_faces() 메서드 수정
     def identify_faces(self, recognizer, frame, current_time, interval, force_all=False):
-        """얼굴 신원 확인
-        
-        Args:
-            force_all: True면 interval 무시하고 모든 얼굴 인식
-        """
+        """얼굴 신원 확인 (신뢰도 누적)"""
         with self.lock:
             newly_identified = []
             
@@ -107,6 +104,10 @@ class FaceTracker:
                 user_id, confidence = recognizer.recognize(face_crop)
                 
                 if user_id:
+                    prev_user = finfo.get('user_id')
+                    if prev_user == user_id:
+                        confidence = min(0.95, confidence + 0.05)
+                    
                     finfo['user_id'] = user_id
                     finfo['confidence'] = confidence
                     finfo['last_identified'] = current_time
@@ -115,6 +116,7 @@ class FaceTracker:
                     newly_identified.append((fid, user_id, confidence))
             
             return newly_identified
+
 
     def get_selected_faces(self, selected_user_ids):
         """선택된 사용자 얼굴만"""

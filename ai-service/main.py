@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
-"""AI Service - 메인 실행 파일 (최적화)"""
 
 import time
 import cv2
 import mediapipe as mp
+import csv
+import os
+from datetime import datetime
 from config import Config
 from camera import CameraStream
 from face_recognition import FaceRecognizer
@@ -19,7 +20,6 @@ class AIService:
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
-            # enable_display=True 얼굴 인식 정확도 display.
         )
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
         
@@ -34,16 +34,74 @@ class AIService:
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
         
+        self.csv_writer = None
+        self.csv_file = None
+        self.trial_count = 0
+        self.session_start_time = None
+        self.fps_samples = []
+        
         print(f"[AI] Config loaded:")
         print(f"  - FACE_LOST_TIMEOUT: {config.FACE_LOST_TIMEOUT}s")
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
+    def _init_csv_logging(self):
+        csv_dir = "/var/lib/ambient-node/ai_logs"
+        os.makedirs(csv_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.csv_file = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
+        
+        self.csv_writer = csv.writer(open(self.csv_file, 'w', newline=''))
+        self.csv_writer.writerow([
+            'timestamp', 'trial', 'user_id', 'confidence', 'fps', 
+            'num_tracked', 'mode', 'session_id', 'face_count'
+        ])
+        print(f"[CSV] Logging to {self.csv_file}")
+
+    def log_recognition(self, user_id, confidence, fps, num_tracked):
+        """얼굴 인식 결과 로깅"""
+        if self.csv_writer is None:
+            return
+            
+        self.trial_count += 1
+        timestamp = datetime.now().isoformat()
+        session_id = getattr(self, 'current_session_id', 'none')
+        
+        self.csv_writer.writerow([
+            timestamp,
+            self.trial_count,
+            user_id or 'unknown',
+            f"{confidence:.3f}" if confidence else '',
+            f"{fps:.1f}" if fps else '',
+            num_tracked,
+            self.current_mode,
+            session_id,
+            len(self.tracker.tracked_faces)
+        ])
+        self.csv_writer.writerows([])  # 즉시 플러시
+
+    def log_fps_summary(self):
+        """FPS 통계 요약"""
+        if len(self.fps_samples) > 0:
+            avg_fps = sum(self.fps_samples) / len(self.fps_samples)
+            print(f"[CSV] FPS Summary: avg={avg_fps:.1f}, samples={len(self.fps_samples)}")
+            self.csv_writer.writerow([
+                datetime.now().isoformat(), '', '', '', f"{avg_fps:.1f}", 
+                '', 'SUMMARY', '', len(self.fps_samples)
+            ])
+
     def on_mode_change(self, mode):
         print(f"[AI] Mode switched: {self.current_mode} -> {mode}")
         self.current_mode = mode
+        
+        # CSV에 모드 변경 기록
+        if self.csv_writer:
+            self.csv_writer.writerow([
+                datetime.now().isoformat(), '', '', '', '', 
+                0, f"MODE:{mode}", '', 0
+            ])
 
-        # 트래킹 모드가 꺼지면 트래커 상태 초기화 (선택 사항)
         if mode != 'ai_tracking':
             print("[AI] Tracking stopped. Resetting tracker...")
             self.tracker.reset()
@@ -51,6 +109,10 @@ class AIService:
     def on_session_update(self, session_id, user_ids):
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
+        self.current_session_id = session_id
+        
+        if self.csv_writer and self.session_start_time is None:
+            self.session_start_time = time.time()
 
     def on_user_register(self, payload):
         user_id = payload.get('user_id')
@@ -67,6 +129,11 @@ class AIService:
             success = self.recognizer.register_user(user_id, username, image_path)
             if success:
                 print(f"[AI] User registered")
+                if self.csv_writer:
+                    self.csv_writer.writerow([
+                        datetime.now().isoformat(), 'REGISTER', user_id, username, '', 
+                        0, self.current_mode, '', 0
+                    ])
             else:
                 print(f"[AI] Registration failed")
         except Exception as e:
@@ -82,6 +149,7 @@ class AIService:
 
     def run(self):
         print("[AI] Service started")
+        self._init_csv_logging() 
         self.camera.start()
         
         with mp.solutions.face_detection.FaceDetection(
@@ -132,6 +200,7 @@ class AIService:
                     
                     for face_id, user_id, confidence in newly_identified:
                         self.mqtt.publish_face_detected(user_id, confidence)
+                        self.log_recognition(user_id, confidence, fps, len(self.tracker.tracked_faces))
                     
                     if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
                         session_id, selected_users = self.mqtt.get_current_session()
@@ -150,14 +219,26 @@ class AIService:
                             lost_info['duration']
                         )
                         print(f"[AI] User lost: {lost_info['user_id']} (duration={lost_info['duration']:.1f}s)")
+                        
+                        if self.csv_writer:
+                            self.csv_writer.writerow([
+                                datetime.now().isoformat(), 'FACE_LOST', 
+                                lost_info['user_id'], '', '', 
+                                0, self.current_mode, '', lost_info['duration']
+                            ])
                     
-                    # FPS 계산
+                    # FPS 계산 및 로깅
                     frame_count += 1
                     if frame_count % 30 == 0:
                         elapsed = time.time() - fps_start
                         fps = 30 / elapsed
                         fps_start = time.time()
+                        self.fps_samples.append(fps)
                         print(f"[INFO] FPS: {fps:.1f} | Tracked: {len(self.tracker.tracked_faces)}")
+                        
+                        # 10분마다 FPS 요약
+                        if len(self.fps_samples) % 300 == 0:  # 10분(600초/2초)
+                            self.log_fps_summary()
                     
                     time.sleep(0.001)
             
@@ -166,6 +247,14 @@ class AIService:
             finally:
                 self.camera.stop()
                 self.mqtt.stop()
+                
+                if self.csv_writer:
+                    self.log_fps_summary()
+                    if self.session_start_time:
+                        session_duration = time.time() - self.session_start_time
+                        print(f"[CSV] Session duration: {session_duration:.1f}s, trials: {self.trial_count}")
+                    self.csv_file.close()
+                    print(f"[CSV] Final report saved: {self.csv_file}")
 
     def _detect_faces(self, frame_processing, face_detection):
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
