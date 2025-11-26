@@ -50,18 +50,23 @@ class AIService:
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
     def _init_csv_logging(self):
+        """CSV 파일 초기화"""
         csv_dir = "/var/lib/ambient-node/ai_logs"
         os.makedirs(csv_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.csv_file = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
+        csv_path = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
         
-        self.csv_writer = csv.writer(open(self.csv_file, 'w', newline=''))
+        self.csv_file = open(csv_path, 'w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
+        
         self.csv_writer.writerow([
             'timestamp', 'trial', 'user_id', 'confidence', 'fps', 
             'num_tracked', 'mode', 'session_id', 'face_count'
         ])
-        print(f"[CSV] Logging to {self.csv_file}")
+        self.csv_file.flush()
+        print(f"[CSV] Logging to {csv_path}")
+
 
     def log_recognition(self, user_id, confidence, fps, num_tracked):
         """얼굴 인식 결과 로깅"""
@@ -257,8 +262,10 @@ class AIService:
                     if self.session_start_time:
                         session_duration = time.time() - self.session_start_time
                         print(f"[CSV] Session duration: {session_duration:.1f}s, trials: {self.trial_count}")
-                    self.csv_file.close()
-                    print(f"[CSV] Final report saved: {self.csv_file}")
+                    
+                    if self.csv_file and not self.csv_file.closed:
+                        self.csv_file.close()
+                        print(f"[CSV] Final report saved")
 
     def _detect_faces(self, frame_processing, face_detection):
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
