@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI Service - 메인 실행 파일 (최적화)"""
 
+
 import time
 import cv2
 import mediapipe as mp
@@ -9,6 +10,7 @@ from camera import CameraStream
 from face_recognition import FaceRecognizer
 from face_tracker import FaceTracker
 from mqtt_client import MQTTClient
+
 
 class AIService:
     def __init__(self, config):
@@ -39,9 +41,11 @@ class AIService:
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
+
     def on_mode_change(self, mode):
         print(f"[AI] Mode switched: {self.current_mode} -> {mode}")
         self.current_mode = mode
+
 
         # 트래킹 모드가 꺼지면 트래커 상태 초기화 (선택 사항)
         if mode != 'ai_tracking':
@@ -51,6 +55,7 @@ class AIService:
     def on_session_update(self, session_id, user_ids):
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
+
 
     def on_user_register(self, payload):
         user_id = payload.get('user_id')
@@ -72,6 +77,7 @@ class AIService:
         except Exception as e:
             print(f"[AI] Registration error: {e}")
 
+
     def on_user_update(self, payload):
         user_id = payload.get('user_id')
         username = payload.get('username')
@@ -79,6 +85,7 @@ class AIService:
         
         if user_id in self.recognizer.known_usernames:
             self.recognizer.known_usernames[user_id] = username
+
 
     def run(self):
         print("[AI] Service started")
@@ -110,6 +117,7 @@ class AIService:
                         frame, 
                         (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
                     )
+
 
                     detected_positions = self._detect_faces(frame_processing, face_detection)
                     
@@ -167,6 +175,7 @@ class AIService:
                 self.camera.stop()
                 self.mqtt.stop()
 
+
     def _detect_faces(self, frame_processing, face_detection):
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
         results = face_detection.process(rgb)
@@ -191,10 +200,12 @@ class AIService:
         
         return detected
 
+
 def main():
     config = Config()
     service = AIService(config)
     service.run()
+
 
 if __name__ == '__main__':
     main()

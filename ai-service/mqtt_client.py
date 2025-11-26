@@ -5,6 +5,7 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 
 
+
 class MQTTClient:
     def __init__(self, broker, port):
         self.client = mqtt.Client(
@@ -27,6 +28,7 @@ class MQTTClient:
         self.client.loop_start()
         print(f"[MQTT] Connected: {broker}:{port}")
 
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         """MQTT 연결 성공 시 호출"""
         if reason_code != 0:
@@ -47,6 +49,7 @@ class MQTTClient:
         print(f"[MQTT] Subscribed to {len(topics)} topics")
         self._request_active_session()
 
+
     def _request_active_session(self):
         """DB에 현재 활성 세션 요청"""
         payload = {
@@ -55,6 +58,7 @@ class MQTTClient:
         }
         self.client.publish("ambient/session/request", json.dumps(payload), qos=1)
         print("[MQTT] 📤 Session request sent to DB")
+
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -111,9 +115,11 @@ class MQTTClient:
         except Exception as e:
             print(f"[MQTT] Error: {e}")
 
+
     def get_current_session(self):
         with self.lock:
             return self.current_session_id, self.selected_user_ids.copy()
+
 
     def publish_face_detected(self, user_id, confidence):
         """얼굴 인식 완료 → DB 저장용"""
@@ -125,6 +131,7 @@ class MQTTClient:
         self.client.publish("ambient/ai/face-detected", json.dumps(payload), qos=1)
         print(f"[MQTT] face-detected: {user_id} (conf={confidence:.2f})")
 
+
     def publish_face_position(self, user_id, x, y):
         """실시간 얼굴 좌표 → Fan Service"""
         payload = {
@@ -135,6 +142,7 @@ class MQTTClient:
         }
         self.client.publish("ambient/ai/face-position", json.dumps(payload), qos=0)
 
+
     def publish_face_lost(self, user_id, duration):
         """얼굴 추적 종료 → DB 저장용"""
         payload = {
@@ -144,6 +152,7 @@ class MQTTClient:
         }
         self.client.publish("ambient/ai/face-lost", json.dumps(payload), qos=1)
         print(f"[MQTT] 📤 face-lost: {user_id} (duration={duration:.1f}s)")
+
 
     def stop(self):
         self.client.loop_stop()

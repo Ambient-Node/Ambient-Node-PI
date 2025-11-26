@@ -5,6 +5,7 @@ import threading
 import time
 from collections import deque
 
+
 class CameraStream:
     def __init__(self, config):
         self.config = config
@@ -12,11 +13,13 @@ class CameraStream:
         self.lock = threading.Lock()
         self.running = False
 
+
     def start(self):
         """카메라 스트림 시작"""
         print(f"[Camera] Using external rpicam-vid at tcp://{self.config.TCP_IP}:{self.config.TCP_PORT}")
         self.running = True
         threading.Thread(target=self._receive_stream, daemon=True).start()
+
 
     def _receive_stream(self):
         """TCP 스트림 수신 (최적화)"""
@@ -49,6 +52,7 @@ class CameraStream:
         buffer = b""
         frame_size = self.config.CAMERA_WIDTH * self.config.CAMERA_HEIGHT * 3 // 2  # YUV420
 
+
         while self.running:
             try:
                 # ✅ 128KB씩 수신 (원본과 동일)
@@ -80,8 +84,10 @@ class CameraStream:
                 print(f"[Camera] ❌ Frame receive error: {e}")
                 break
 
+
         sock.close()
         print("[Camera] Receiver stopped")
+
 
     def get_frame(self):
         """가장 최근 프레임 반환 (복사 없음)"""
@@ -89,6 +95,7 @@ class CameraStream:
             if self.frame_queue:
                 return self.frame_queue[-1]  # ✅ copy() 제거
         return None
+
 
     def stop(self):
         self.running = False

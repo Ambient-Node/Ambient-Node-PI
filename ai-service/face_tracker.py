@@ -1,6 +1,8 @@
 """얼굴 추적 관리"""
 
+
 import threading
+
 
 class FaceTracker:
     def __init__(self, max_distance=300, lost_timeout=8.0, enable_display=True):
@@ -16,6 +18,7 @@ class FaceTracker:
             self.tracked_faces.clear()
             self.next_id = 0
             print("[Tracker] Memory cleared (Reset)")
+
 
     def update(self, detected_positions, current_time):
         """감지된 얼굴로 추적 업데이트"""
@@ -47,6 +50,7 @@ class FaceTracker:
             lost_faces = self._remove_expired(current_time, timeout=self.lost_timeout)
             return updated_ids, lost_faces
 
+
     def _find_closest(self, center):
         """가장 가까운 얼굴 찾기"""
         min_dist = float('inf')
@@ -61,6 +65,7 @@ class FaceTracker:
                 closest_id = fid
         
         return closest_id
+
 
     def _remove_expired(self, current_time, timeout):
         """타임아웃된 얼굴 제거"""
@@ -84,12 +89,9 @@ class FaceTracker:
         
         return lost_faces
 
+
     def identify_faces(self, recognizer, frame, current_time, interval, force_all=False):
-        """얼굴 신원 확인
-        
-        Args:
-            force_all: True면 interval 무시하고 모든 얼굴 인식
-        """
+        """얼굴 신원 확인 (신뢰도 누적)"""
         with self.lock:
             newly_identified = []
             
@@ -107,6 +109,12 @@ class FaceTracker:
                 user_id, confidence = recognizer.recognize(face_crop)
                 
                 if user_id:
+                    # ✅ 연속 인식 시 신뢰도 부스트
+                    prev_user = finfo.get('user_id')
+                    if prev_user == user_id:
+                        # 같은 사람 재확인 → 0.05씩 증가 (최대 0.95)
+                        confidence = min(0.95, confidence + 0.05)
+                    
                     finfo['user_id'] = user_id
                     finfo['confidence'] = confidence
                     finfo['last_identified'] = current_time
@@ -115,6 +123,8 @@ class FaceTracker:
                     newly_identified.append((fid, user_id, confidence))
             
             return newly_identified
+
+
 
     def get_selected_faces(self, selected_user_ids):
         """선택된 사용자 얼굴만"""
