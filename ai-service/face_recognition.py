@@ -1,4 +1,4 @@
-"""얼굴 인식 모델 관리 (FaceNet 전용 전처리 복구)"""
+"""얼굴 인식 모델 관리 (스레드 안전성 강화)"""
 import os
 import cv2
 import json
@@ -7,7 +7,7 @@ from datetime import datetime
 from tflite_runtime.interpreter import Interpreter
 
 class FaceRecognizer:
-    def __init__(self, model_path, face_dir, similarity_threshold=0.3):
+    def __init__(self, model_path, face_dir, similarity_threshold=0.4):
         self.face_dir = face_dir
         self.threshold = similarity_threshold
         self.known_embeddings = []
@@ -20,16 +20,27 @@ class FaceRecognizer:
         self.output_details = self.interpreter.get_output_details()
         self.input_shape = self.input_details[0]['shape'][1:3]
         
-        print(f"[FaceRec] Model: {model_path} | Shape: {self.input_shape}")
+        print(f"[FaceRec] Model: {model_path} | Input: {self.input_shape}")
         if not os.path.exists(self.face_dir):
             os.makedirs(self.face_dir, exist_ok=True)
 
     def load_selected_users(self, user_ids):
-        """기존 코드 유지"""
-        self.known_embeddings = []
-        self.known_user_ids = []
-        self.known_usernames = {}
-        if not user_ids: return
+        """
+        [수정됨] 스레드 안전성 확보
+        기존 리스트를 바로 비우지 않고, 임시 리스트(temp)에 로드한 뒤 한 번에 교체합니다.
+        """
+        temp_embeddings = []
+        temp_user_ids = []
+        temp_usernames = {}
+        
+        if not user_ids:
+            # 선택된 유저가 없으면 빈 리스트로 교체
+            self.known_embeddings = []
+            self.known_user_ids = []
+            self.known_usernames = {}
+            return
+        
+        print(f"[FaceRec] Loading {len(user_ids)} users...")
         
         for user_id in user_ids:
             user_path = os.path.join(self.face_dir, user_id)
@@ -39,37 +50,33 @@ class FaceRecognizer:
             if os.path.exists(emb_file):
                 try:
                     emb = np.load(emb_file)
-                    self.known_embeddings.append(emb)
-                    self.known_user_ids.append(user_id)
+                    temp_embeddings.append(emb)
+                    temp_user_ids.append(user_id)
+                    
                     if os.path.exists(metadata_file):
                         with open(metadata_file, 'r') as f:
                             data = json.load(f)
-                            self.known_usernames[user_id] = data.get('username', user_id)
+                            temp_usernames[user_id] = data.get('username', user_id)
                     else:
-                        self.known_usernames[user_id] = user_id
-                except Exception:
-                    pass
+                        temp_usernames[user_id] = user_id
+                except Exception as e:
+                    print(f"[FaceRec] Load error {user_id}: {e}")
+
+        # ✅ 여기서 한 번에 교체 (Atomic Operation in Python)
+        # 메인 스레드가 빈 리스트를 참조할 틈을 주지 않음
+        self.known_embeddings = temp_embeddings
+        self.known_user_ids = temp_user_ids
+        self.known_usernames = temp_usernames
+        print(f"[FaceRec] Successfully loaded {len(self.known_user_ids)} users")
 
     def get_embedding(self, face_img):
-        """✅ FaceNet 전용 전처리 (CLAHE + Kernel)"""
         if face_img is None or face_img.size == 0:
-            raise ValueError("Input image is empty")
-        
-        # 1. LAB 색공간 변환 후 CLAHE 적용 (조명 보정)
-        lab = cv2.cvtColor(face_img, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        l = clahe.apply(l)
-        face_img = cv2.merge([l, a, b])
-        face_img = cv2.cvtColor(face_img, cv2.COLOR_LAB2BGR)
-        
-        # 2. 커널 필터 적용 (선명화)
-        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-        face_img = cv2.filter2D(face_img, -1, kernel)
-        
-        # 3. 모델 입력 처리
+            return None
+            
         img = cv2.resize(face_img, tuple(self.input_shape))
         img = img.astype(np.float32)
+        
+        # FaceNet 표준 정규화
         img = (img - 127.5) / 128.0
         img = np.expand_dims(img, axis=0)
         
@@ -77,36 +84,26 @@ class FaceRecognizer:
         self.interpreter.invoke()
         return self.interpreter.get_tensor(self.output_details[0]['index'])[0]
 
-    def register_user(self, user_id, username, image_path):
-        try:
-            img = cv2.imread(image_path)
-            if img is None: return False
-            
-            # 저장 시에도 동일한 전처리 적용
-            embedding = self.get_embedding(img)
-            
-            user_dir = os.path.join(self.face_dir, user_id)
-            os.makedirs(user_dir, exist_ok=True)
-            np.save(os.path.join(user_dir, "embedding.npy"), embedding)
-            
-            with open(os.path.join(user_dir, "metadata.json"), 'w') as f:
-                json.dump({
-                    "user_id": user_id,
-                    "username": username,
-                    "created_at": datetime.now().isoformat(),
-                    "image_path": image_path
-                }, f, indent=2)
-            return True
-        except Exception as e:
-            print(f"Reg Error: {e}")
-            return False
-
     def recognize(self, face_crop):
+        """
+        [수정됨] 방어 코드 추가
+        계산 직전에 리스트가 비어있는지 한 번 더 확인하여 argmax 에러 방지
+        """
+        # 1차 체크
         if not self.known_embeddings:
             return None, 0.0
         
         embedding = self.get_embedding(face_crop)
+        if embedding is None: return None, 0.0
+
+        # 코사인 유사도 계산
         sims = [self._cosine_sim(embedding, k) for k in self.known_embeddings]
+        
+        # ✅ 2차 체크 (방어 코드)
+        # 스레드 타이밍 이슈로 sims가 비어있을 경우 안전하게 리턴
+        if not sims:
+            return None, 0.0
+
         best_idx = int(np.argmax(sims))
         best_sim = sims[best_idx]
         
@@ -116,7 +113,21 @@ class FaceRecognizer:
 
     @staticmethod
     def _cosine_sim(a, b):
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a == 0 or norm_b == 0: return 0.0
-        return float(np.dot(a, b) / (norm_a * norm_b))
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    def register_user(self, user_id, username, image_path):
+        try:
+            img = cv2.imread(image_path)
+            if img is None: return False
+            
+            embedding = self.get_embedding(img)
+            if embedding is None: return False
+            
+            user_dir = os.path.join(self.face_dir, user_id)
+            os.makedirs(user_dir, exist_ok=True)
+            np.save(os.path.join(user_dir, "embedding.npy"), embedding)
+            
+            with open(os.path.join(user_dir, "metadata.json"), 'w') as f:
+                json.dump({"user_id": user_id, "username": username}, f)
+            return True
+        except Exception: return False
