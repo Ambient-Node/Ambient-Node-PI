@@ -15,39 +15,29 @@ from mqtt_client import MQTTClient
 class AIService:
     def __init__(self, config):
         self.config = config
-        
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
-            # enable_display=True 얼굴 인식 정확도 display.
         )
         self.mqtt = MQTTClient(config.BROKER, config.PORT)
-        
         self.mqtt.on_session_update = self.on_session_update
         self.mqtt.on_user_register = self.on_user_register
         self.mqtt.on_user_update = self.on_user_update
         self.mqtt.on_mode_change = self.on_mode_change
-        
         self.current_mode = "manual_control"
-        
         self.last_position_time = 0
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
-        
         print(f"[AI] Config loaded:")
         print(f"  - FACE_LOST_TIMEOUT: {config.FACE_LOST_TIMEOUT}s")
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
         print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
 
-
     def on_mode_change(self, mode):
         print(f"[AI] Mode switched: {self.current_mode} -> {mode}")
         self.current_mode = mode
-
-
-        # 트래킹 모드가 꺼지면 트래커 상태 초기화 (선택 사항)
         if mode != 'ai_tracking':
             print("[AI] Tracking stopped. Resetting tracker...")
             self.tracker.reset()
@@ -55,19 +45,17 @@ class AIService:
     def on_session_update(self, session_id, user_ids):
         print(f"[AI] Session updated: {session_id}")
         print(f"[AI] Tracking users: {user_ids}")
-
+        # ✅ 선택된 유저만 임베딩 로드
+        self.recognizer.load_selected_users(user_ids)
 
     def on_user_register(self, payload):
         user_id = payload.get('user_id')
         username = payload.get('username')
         image_path = payload.get('image_path')
-        
         print(f"[AI] New user registration: {username} ({user_id})")
-        
         if not image_path:
             print("[AI] Error: No image_path")
             return
-        
         try:
             success = self.recognizer.register_user(user_id, username, image_path)
             if success:
@@ -77,12 +65,10 @@ class AIService:
         except Exception as e:
             print(f"[AI] Registration error: {e}")
 
-
     def on_user_update(self, payload):
         user_id = payload.get('user_id')
         username = payload.get('username')
         print(f"[AI] User updated: {user_id} → {username}")
-        
         if user_id in self.recognizer.known_usernames:
             self.recognizer.known_usernames[user_id] = username
 
