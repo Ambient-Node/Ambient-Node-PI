@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Service - FHD 입력 + Simple Tracking + NMS"""
+"""AI Service - 원본 해상도 크롭 방식 (정확도 극대화)"""
 
 import time
 import cv2
@@ -11,7 +11,7 @@ from face_recognition import FaceRecognizer
 from face_tracker import FaceTracker
 from mqtt_client import MQTTClient
 
-# ✅ 중복 박스 제거 (3~4개 잡히는 문제 해결용)
+# ✅ NMS: 중복 박스 제거
 def non_max_suppression(boxes, scores, overlap_thresh=0.3):
     if len(boxes) == 0: return []
     if boxes.dtype.kind == "i": boxes = boxes.astype("float")
@@ -48,7 +48,6 @@ class AIService:
         self.camera = CameraStream(config)
         self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
         
-        # 트래커 초기화
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
@@ -63,11 +62,7 @@ class AIService:
         self.current_mode = "manual_control"
         self.last_position_time = 0
         
-        # ✅ 스케일 계산 (FHD / Processing)
-        self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
-        self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
-        
-        print(f"[AI] 1920x1080 Mode (Proc: {config.PROCESSING_WIDTH}x{config.PROCESSING_HEIGHT})")
+        print(f"[AI] Initialized: Input {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
 
     def on_mode_change(self, mode):
         print(f"[AI] Mode: {mode}")
@@ -91,11 +86,13 @@ class AIService:
         print("[AI] Service Started")
         self.camera.start()
         
-        # ✅ 1초에 4번 전송 (0.25s)
+        # 4Hz 전송
         target_send_interval = 0.25
 
-        # ✅ 감지 설정 (FHD 입력이므로 model_selection=1 권장하지만, 0도 무관)
-        # confidence=0.5 + NMS 조합으로 중복 박스 완벽 차단
+        # 감지 모델 설정
+        # 1920 해상도에서는 얼굴이 작아질 수 있으므로 model_selection=1 (원거리/전신)이 유리할 수 있음
+        # 하지만 640으로 리사이즈해서 찾을 거라면 0번이 더 잘 잡힐 수도 있습니다.
+        # 일단 안전하게 1번으로 설정합니다. (인식이 안 되면 0으로 바꿔보세요)
         with mp.solutions.face_detection.FaceDetection(
             model_selection=1, 
             min_detection_confidence=0.5 
@@ -109,28 +106,31 @@ class AIService:
                         time.sleep(1.0)
                         continue
                     
-                    frame = self.camera.get_frame() # 1920x1080 원본
+                    # 1. 원본 프레임 가져오기 (1920x1080)
+                    frame = self.camera.get_frame() 
                     if frame is None:
                         time.sleep(0.001)
                         continue
                     
                     current_time = time.time()
                     
-                    # 1. 속도를 위해 작게 리사이즈하여 감지 (640x360)
-                    frame_processing = cv2.resize(frame, 
-                        (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT))
+                    # 2. 감지 속도를 위해 '복사본'을 작게 만듦 (비율 유지)
+                    # 원본 1920x1080 -> 640x360 (16:9 비율 유지)
+                    # 이렇게 해야 얼굴이 찌그러지지 않아 인식이 잘 됩니다.
+                    frame_small = cv2.resize(frame, (640, 360))
                     
-                    # 2. 얼굴 감지 수행 (NMS 적용됨)
-                    detected_positions = self._detect_faces(frame_processing, face_detection)
+                    # 3. 작은 화면에서 얼굴 위치 찾기
+                    # 여기서 찾은 bbox는 640x360 기준이 아니라 '0.0 ~ 1.0' 비율 값입니다.
+                    detected_positions = self._detect_faces(frame_small, face_detection)
                     
-                    # 3. 트래커 업데이트 (단순 거리 계산 방식)
+                    # 4. 트래커 업데이트
                     updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
                 
-                    # 4. 얼굴 신원 확인 (원본 FHD 프레임에서 크롭 -> 인식률 상승)
+                    # 5. 얼굴 신원 확인 (반드시 '원본 frame'을 사용)
                     force_identify = (current_time - last_global_identify_time >= self.config.FACE_ID_INTERVAL)
                     newly_identified = self.tracker.identify_faces(
                         self.recognizer, 
-                        frame,  # ✅ 원본 프레임 넘김
+                        frame,  # ✅ 원본(고화질)에서 얼굴을 잘라야 함!
                         current_time,
                         interval=self.config.FACE_ID_INTERVAL,
                         force_all=force_identify
@@ -141,14 +141,14 @@ class AIService:
                     for _, user_id, confidence in newly_identified:
                         self.mqtt.publish_face_detected(user_id, confidence)
                     
-                    # 5. 좌표 전송 (4Hz)
+                    # 6. 좌표 전송
                     if current_time - self.last_position_time >= target_send_interval:
                         session_id, selected_users = self.mqtt.get_current_session()
                         tracked_faces = self.tracker.get_selected_faces(selected_users)
                         
                         unique_users = {}
                         for finfo in tracked_faces:
-                            # ✅ 유령 좌표 방지: 0.3초 내에 감지된 것만 전송
+                            # 0.3초 내에 갱신된 얼굴만 전송
                             if current_time - finfo['last_seen'] < 0.3:
                                 unique_users[finfo['user_id']] = finfo
                         
@@ -170,6 +170,7 @@ class AIService:
                 self.mqtt.stop()
 
     def _detect_faces(self, frame_processing, face_detection):
+        # MediaPipe는 RGB 이미지를 원함
         rgb = cv2.cvtColor(frame_processing, cv2.COLOR_BGR2RGB)
         results = face_detection.process(rgb)
         
@@ -178,45 +179,52 @@ class AIService:
             boxes = []
             scores = []
             raw_detections = []
+            
+            # frame_processing의 크기 (작은 이미지)
+            h_small, w_small, _ = frame_processing.shape
 
             for detection in results.detections:
                 score = detection.score[0]
                 bbox = detection.location_data.relative_bounding_box
                 
-                # Processing 좌표계
-                x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH)
-                y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT)
-                x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH)
-                y2 = int((bbox.ymin + bbox.height) * self.config.PROCESSING_HEIGHT)
+                # NMS 계산을 위해 '작은 화면' 기준 픽셀 좌표 계산
+                x1 = int(bbox.xmin * w_small)
+                y1 = int(bbox.ymin * h_small)
+                x2 = int((bbox.xmin + bbox.width) * w_small)
+                y2 = int((bbox.ymin + bbox.height) * h_small)
                 
                 boxes.append([x1, y1, x2, y2])
                 scores.append(score)
                 raw_detections.append(bbox)
 
             if len(boxes) > 0:
-                boxes_np = np.array(boxes)
-                scores_np = np.array(scores)
-                
-                # ✅ NMS: 중복 박스 제거
-                picked_indices = non_max_suppression(boxes_np, scores_np, overlap_thresh=0.3)
+                # NMS 실행 (중복 제거)
+                picked_indices = non_max_suppression(np.array(boxes), np.array(scores), overlap_thresh=0.3)
 
                 for i in picked_indices:
                     bbox_raw = raw_detections[i]
-                    x1, y1, x2, y2 = boxes[i]
                     
-                    # ✅ FHD 좌표계로 변환 (선풍기에 보낼 좌표)
-                    x_center_fhd = int((bbox_raw.xmin + bbox_raw.width / 2) * self.config.CAMERA_WIDTH)
-                    y_center_fhd = int((bbox_raw.ymin + bbox_raw.height / 2) * self.config.CAMERA_HEIGHT)
+                    # ✅ [중요] 여기서 '원본(1920x1080)' 기준 좌표로 변환합니다.
+                    # MediaPipe의 bbox_raw는 0.0~1.0 비율이므로, 
+                    # 원본 해상도(CAMERA_WIDTH/HEIGHT)를 곱해주면 정확한 원본 좌표가 나옵니다.
                     
-                    # Bounding Box도 FHD로 변환 (얼굴 인식 크롭용)
-                    x1_fhd = int(bbox_raw.xmin * self.config.CAMERA_WIDTH)
-                    y1_fhd = int(bbox_raw.ymin * self.config.CAMERA_HEIGHT)
-                    x2_fhd = int((bbox_raw.xmin + bbox_raw.width) * self.config.CAMERA_WIDTH)
-                    y2_fhd = int((bbox_raw.ymin + bbox_raw.height) * self.config.CAMERA_HEIGHT)
+                    # 원본 해상도 (1920, 1080)
+                    orig_w = self.config.CAMERA_WIDTH
+                    orig_h = self.config.CAMERA_HEIGHT
+                    
+                    # 중심점 (선풍기 전송용)
+                    x_center = int((bbox_raw.xmin + bbox_raw.width / 2) * orig_w)
+                    y_center = int((bbox_raw.ymin + bbox_raw.height / 2) * orig_h)
+                    
+                    # Bounding Box (얼굴 인식 크롭용) - 원본 기준
+                    x1_orig = int(bbox_raw.xmin * orig_w)
+                    y1_orig = int(bbox_raw.ymin * orig_h)
+                    x2_orig = int((bbox_raw.xmin + bbox_raw.width) * orig_w)
+                    y2_orig = int((bbox_raw.ymin + bbox_raw.height) * orig_h)
 
                     detected.append({
-                        'center': (x_center_fhd, y_center_fhd),
-                        'bbox': (x1_fhd, y1_fhd, x2_fhd, y2_fhd) # FHD Box
+                        'center': (x_center, y_center),
+                        'bbox': (x1_orig, y1_orig, x2_orig, y2_orig) # 원본 좌표
                     })
         
         return detected
