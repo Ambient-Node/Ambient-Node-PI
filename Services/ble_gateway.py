@@ -13,7 +13,6 @@ from datetime import datetime
 from PIL import Image
 import io
 
-# ... (임포트 및 설정 부분은 기존과 동일) ...
 
 try:
     import dbus
@@ -54,13 +53,6 @@ _expected_total = 0
 # 이미지 저장 경로
 USER_IMAGES_DIR = "/var/lib/ambient-node/users"
 
-# ... (PairingAgent 클래스 및 register_pairing_agent 함수는 기존과 동일) ...
-# ... (save_base64_image_to_png 함수 기존과 동일) ...
-# ... (MQTT 핸들러 on_mqtt_connect, on_mqtt_message, send_notification 기존과 동일) ...
-
-# ========================================
-# Pairing Agent (생략 - 위와 동일)
-# ========================================
 class PairingAgent(dbus.service.Object):
     def __init__(self, bus):
         super().__init__(bus, _agent_path)
@@ -82,9 +74,6 @@ def register_pairing_agent():
     manager.RequestDefaultAgent(_agent_path)
     return agent
 
-# ========================================
-# 이미지 저장 함수 (생략 - 위와 동일)
-# ========================================
 def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> str:
     if not os.path.exists(save_dir):
         try:
@@ -107,9 +96,6 @@ def save_base64_image_to_png(base64_str: str, save_dir: str, filename: str) -> s
         print(f"[IMAGE] Error: {e}")
         return ""
 
-# ========================================
-# MQTT 핸들러 (생략 - 위와 동일)
-# ========================================
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
         print(f'[MQTT] Connected')
@@ -143,31 +129,18 @@ def send_notification(data: dict):
         except Exception as e:
             print(f"[BLE] Notify error: {e}")
 
-# ========================================
-# ✅ [핵심 수정] user_id 추출 로직 강화
-# ========================================
 def extract_user_id(payload: dict) -> str:
-    """
-    1순위: Payload 최상위의 'user_id' 필드 (앱에서 보낸 커맨드)
-    2순위: 'user_list' 내부의 첫 번째 사용자 (기존 user_select 로직 호환)
-    """
-    # 1. 앱이 직접 보낸 user_id 확인
     if 'user_id' in payload and payload['user_id']:
         return payload['user_id']
-    
-    # 2. user_list가 있는 경우 (user_select 이벤트 등)
+
     user_list = payload.get('user_list', [])
     if user_list and isinstance(user_list, list) and len(user_list) > 0:
-        # 리스트 내부 객체가 dict인지 확인
         first_user = user_list[0]
         if isinstance(first_user, dict):
             return first_user.get('user_id')
             
     return None
 
-# ========================================
-# 데이터 처리 로직
-# ========================================
 def process_complete_data(data_str):
     global _mqtt_client
 
@@ -175,23 +148,18 @@ def process_complete_data(data_str):
         payload = json.loads(data_str)
     except json.JSONDecodeError as e:
         print(f'[WARN] JSON parse error: {e}')
-        # Git 충돌 마커 등 정크 데이터가 들어올 경우 방어
         send_notification({"type": "ERROR", "message": "Invalid JSON"})
         return
 
     timestamp = datetime.now().isoformat()
     action = payload.get('action', '')
     
-    # ✅ 수정: 개선된 함수를 통해 user_id 추출
-    # 이제 앱에서 {"action": "speed_change", "speed": 1, "user_id": "user_xxx"} 로 보내면
-    # 여기서 user_id 변수에 "user_xxx"가 정상적으로 담깁니다.
     user_id = extract_user_id(payload)
     
     topic = None
     mqtt_payload = {}
 
     if action == 'user_register':
-        # 등록 시에는 payload의 user_id가 신규 ID가 되거나 없을 수 있음
         register_user_id = payload.get('user_id')
         if not register_user_id:
             register_user_id = f"user_{int(time.time())}"
@@ -203,7 +171,6 @@ def process_complete_data(data_str):
         
         image_path = ""
         if base64_img:
-            # 이미지 저장은 시간이 걸리므로 실전에서는 스레드로 분리 권장 (아래 피드백 참조)
             user_dir = os.path.join(USER_IMAGES_DIR, register_user_id)
             filename = f"{register_user_id}.png"
             image_path = save_base64_image_to_png(base64_img, user_dir, filename)
@@ -217,7 +184,6 @@ def process_complete_data(data_str):
         }
 
     elif action == 'user_update':
-        # user_id 변수 활용
         username = payload.get('username', 'Unknown')
         base64_img = payload.get('image_base64')
         
@@ -252,7 +218,7 @@ def process_complete_data(data_str):
         mqtt_payload = {
             "event_type": "speed_change",
             "speed": speed,
-            "user_id": user_id, # 앱이 보내줬으면 여기에 값이 들어감
+            "user_id": user_id, 
             "timestamp": timestamp
         }
         print(f'[BLE] Speed: {speed} (user: {user_id})')
@@ -266,14 +232,14 @@ def process_complete_data(data_str):
             "event_type": "direction_change",
             "direction": direction,
             "toggleOn": toggle_on,
-            "user_id": user_id, # 앱이 보내줬으면 여기에 값이 들어감
+            "user_id": user_id, 
             "timestamp": timestamp
         }
         print(f'[BLE] direction: {direction} (user: {user_id})')
 
     elif action == 'mode_change':
         mode = payload.get('mode', 'manual')
-        cmd_type = payload.get('type') 
+        cmd_type = payload.get('type')
         
         topic = "ambient/command/mode"
         mqtt_payload = {
@@ -328,7 +294,6 @@ def process_complete_data(data_str):
         print(f'[WARN] Unknown action: {action}')
         return
 
-    # MQTT Publish
     if _mqtt_client and _mqtt_client.is_connected() and topic:
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
         print(f'[MQTT] Published to {topic}: {mqtt_payload}')
@@ -336,15 +301,10 @@ def process_complete_data(data_str):
         if action in ['speed_change', 'direction_change', 'mode_change', 'user_select']:
             send_notification({"type": "ACK", "action": action, "success": True})
 
-# ... (이하 on_write_characteristic, on_read_characteristic, setup_gatt, main 등 기존과 동일) ...
-# ========================================
-# BLE Write 수신 (생략 - 기존 로직 유지)
-# ========================================
 def on_write_characteristic(value, options):
     global _chunk_buffer, _expected_total
     try:
         data_str = bytes(value).decode('utf-8')
-        # 청크 처리 로직 (기존과 동일)
         if data_str.startswith('<CHUNK:'):
             try:
                 tag_end = data_str.find('>')
@@ -400,22 +360,30 @@ def setup_gatt_and_advertising():
     global _notify_char
     adapter_obj = peripheral.adapter.Adapter()
     app = peripheral.localGATT.Application()
+    
     service = peripheral.localGATT.Service(1, SERVICE_UUID, True)
+    
     write_char = peripheral.localGATT.Characteristic(1, 1, WRITE_CHAR_UUID, [], False, ['write-without-response', 'write'], read_callback=None, write_callback=on_write_characteristic, notify_callback=None)
     _notify_char = peripheral.localGATT.Characteristic(1, 2, NOTIFY_CHAR_UUID, [], False, ['notify'], read_callback=on_read_characteristic, write_callback=None, notify_callback=None)
+    
     app.add_managed_object(service)
     app.add_managed_object(write_char)
     app.add_managed_object(_notify_char)
+    
     gatt_manager = peripheral.GATT.GattManager(adapter_obj.address)
     gatt_manager.register_application(app, {})
+    
     advert = peripheral.advertisement.Advertisement(1, 'peripheral')
     advert.local_name = DEVICE_NAME
     advert.service_uuids = [SERVICE_UUID]
+    
     ad_manager = peripheral.advertisement.AdvertisingManager(adapter_obj.address)
     ad_manager.register_advertisement(advert, {})
     print(f'[BLE] Advertising as "{DEVICE_NAME}"')
     print(f'[BLE] Using adapter: {adapter_obj.address}')
+    
     threading.Thread(target=lambda: app.start(), daemon=True).start()
+    
     return ad_manager, advert, gatt_manager, app
 
 def main():
