@@ -123,7 +123,7 @@ class FanService:
 
     def _send_positions(self):
         if not self.tracked_positions:
-            self.hw.send_command("P X")
+            # self.hw.send_command("P X")
             return
         positions = list(self.tracked_positions.values())
         
