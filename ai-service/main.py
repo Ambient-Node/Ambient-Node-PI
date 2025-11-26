@@ -53,20 +53,15 @@ class AIService:
         """CSV 파일 초기화"""
         csv_dir = "/var/lib/ambient-node/ai_logs"
         os.makedirs(csv_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
-        
-        self.csv_file = open(csv_path, 'w', newline='')
+        csv_path = os.path.join(csv_dir, f"ai_accuracy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+
+        self.csv_file = open(csv_path, 'w', newline='')  # 파일 객체 저장
         self.csv_writer = csv.writer(self.csv_file)
-        
         self.csv_writer.writerow([
-            'timestamp', 'trial', 'user_id', 'confidence', 'fps', 
+            'timestamp', 'trial', 'user_id', 'confidence', 'fps',
             'num_tracked', 'mode', 'session_id', 'face_count'
         ])
-        self.csv_file.flush()
         print(f"[CSV] Logging to {csv_path}")
-
 
     def log_recognition(self, user_id, confidence, fps, num_tracked):
         """얼굴 인식 결과 로깅"""
