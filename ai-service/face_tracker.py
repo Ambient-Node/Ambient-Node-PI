@@ -1,9 +1,6 @@
 """얼굴 추적 관리"""
 
 import threading
-import cv2
-import numpy as np
-from datetime import datetime
 
 class FaceTracker:
     def __init__(self, max_distance=300, lost_timeout=8.0, enable_display=True):
@@ -134,7 +131,8 @@ class FaceTracker:
                 for fid, finfo in self.tracked_faces.items()
                 if finfo.get('user_id') in selected_user_ids
             ]
-    
+            
+    '''
     def draw_tracked_faces(self, frame, recognizer):
         """추적 중인 얼굴을 프레임에 그리기"""
         if not self.enable_display:
@@ -159,6 +157,7 @@ class FaceTracker:
                     label = f"Unknown #{fid}"
                     conf_text = "N/A"
                 
+                # 바운딩 박스
                 cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 3)
                 
                 # 좌표 표시 (좌상단 위)
@@ -190,6 +189,7 @@ class FaceTracker:
         self._draw_info_panel(display_frame)
         
         return display_frame
+    '''
     
     def _draw_info_panel(self, frame):
         """화면 상단 정보 패널"""
