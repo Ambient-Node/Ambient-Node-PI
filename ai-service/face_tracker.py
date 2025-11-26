@@ -1,4 +1,8 @@
+"""얼굴 추적 관리"""
+
+
 import threading
+
 
 class FaceTracker:
     def __init__(self, max_distance=300, lost_timeout=8.0, enable_display=True):
@@ -14,6 +18,7 @@ class FaceTracker:
             self.tracked_faces.clear()
             self.next_id = 0
             print("[Tracker] Memory cleared (Reset)")
+
 
     def update(self, detected_positions, current_time):
         """감지된 얼굴로 추적 업데이트"""
@@ -43,33 +48,8 @@ class FaceTracker:
                     self.next_id += 1
             
             lost_faces = self._remove_expired(current_time, timeout=self.lost_timeout)
-            
-            # ✅ 중복 제거 (같은 user_id 여러 개 → 1개만 남김)
-            self.tidy_tracked_faces()
-            
             return updated_ids, lost_faces
 
-    def tidy_tracked_faces(self):
-        """동일 user_id 다중 바운딩박스 정리 (최신/신뢰도 높은 것만 남김)"""
-        if len(self.tracked_faces) <= 1:
-            return
-        
-        user_best = {}
-        for fid, finfo in self.tracked_faces.items():
-            uid = finfo.get('user_id')
-            if not uid:
-                continue
-            conf = finfo.get('confidence', 0)
-            last_id_time = finfo.get('last_identified', 0)
-            if uid not in user_best or conf > user_best[uid][0] or last_id_time > user_best[uid][1]:
-                user_best[uid] = (conf, last_id_time, fid)
-        
-        # 삭제 대상 정리
-        for uid, (best_conf, best_time, best_fid) in user_best.items():
-            for fid in list(self.tracked_faces.keys()):
-                if self.tracked_faces[fid].get('user_id') == uid and fid != best_fid:
-                    del self.tracked_faces[fid]
-                    print(f"[Tracker] Removed duplicate {uid} fid={fid} (kept {best_fid})")
 
     def _find_closest(self, center):
         """가장 가까운 얼굴 찾기"""
@@ -85,6 +65,7 @@ class FaceTracker:
                 closest_id = fid
         
         return closest_id
+
 
     def _remove_expired(self, current_time, timeout):
         """타임아웃된 얼굴 제거"""
@@ -108,6 +89,7 @@ class FaceTracker:
         
         return lost_faces
 
+
     def identify_faces(self, recognizer, frame, current_time, interval, force_all=False):
         """얼굴 신원 확인 (신뢰도 누적)"""
         with self.lock:
@@ -127,8 +109,10 @@ class FaceTracker:
                 user_id, confidence = recognizer.recognize(face_crop)
                 
                 if user_id:
+                    # ✅ 연속 인식 시 신뢰도 부스트
                     prev_user = finfo.get('user_id')
                     if prev_user == user_id:
+                        # 같은 사람 재확인 → 0.05씩 증가 (최대 0.95)
                         confidence = min(0.95, confidence + 0.05)
                     
                     finfo['user_id'] = user_id
@@ -139,6 +123,8 @@ class FaceTracker:
                     newly_identified.append((fid, user_id, confidence))
             
             return newly_identified
+
+
 
     def get_selected_faces(self, selected_user_ids):
         """선택된 사용자 얼굴만"""

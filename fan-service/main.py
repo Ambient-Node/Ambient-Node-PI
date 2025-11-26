@@ -13,7 +13,7 @@ class FanService:
         self.config = config
         self.running = True
         self.tracked_positions = {}
-        
+        self.last_sent_positions = {}
         self.movement_mode = "manual_control"  # motor: ai_tracking, rotation, manual_control
         self.is_natural_wind = False           # wind: True(natural), False(normal)
         
@@ -77,21 +77,25 @@ class FanService:
             self._handle_timer(payload)
             
         elif topic == "ambient/ai/face-position":
-            # 움직임 모드가 AI일 때만 작동
             if self.movement_mode == "ai_tracking":
                 user_id = payload.get("user_id")
                 x = payload.get("x")
                 y = payload.get("y")
                 if user_id and x is not None and y is not None:
-                    self.tracked_positions[user_id] = (x, y)
-                    self._send_positions()
+                    if (
+                        user_id not in self.last_sent_positions or
+                        self.last_sent_positions[user_id] != (x, y)
+                    ):
+                        self.hw.send_command(f"P ({x},{y})")
+                        self.last_sent_positions[user_id] = (x, y)
 
         elif topic == "ambient/ai/face-lost":
             user_id = payload.get("user_id")
-            if user_id in self.tracked_positions:
-                del self.tracked_positions[user_id]
+            if user_id in self.last_sent_positions:
+                del self.last_sent_positions[user_id]
+                # 팬을 정지(예시)
                 if self.movement_mode == "ai_tracking":
-                    self._send_positions()
+                    self.hw.send_command("P X")
 
     def _handle_timer(self, payload):
         try:
