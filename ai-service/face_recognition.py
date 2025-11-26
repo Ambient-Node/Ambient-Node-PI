@@ -1,5 +1,4 @@
-"""얼굴 인식 모델 관리"""
-
+"""얼굴 인식 모델 관리 (세션 선택 사용자만 로드)"""
 
 import os
 import cv2
@@ -8,14 +7,13 @@ import numpy as np
 from datetime import datetime
 from tflite_runtime.interpreter import Interpreter
 
-
 class FaceRecognizer:
     def __init__(self, model_path, face_dir, similarity_threshold=0.3):
         self.face_dir = face_dir
         self.threshold = similarity_threshold
         self.known_embeddings = []
         self.known_user_ids = []
-        self.known_usernames = {} 
+        self.known_usernames = {}
         
         self.interpreter = Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
@@ -26,26 +24,27 @@ class FaceRecognizer:
         print(f"[FaceRec] Model loaded: {model_path}")
         print(f"[FaceRec] Input shape: {self.input_shape}")
         
-        self.load_known_faces()
+        # ✅ 시작 시 모든 사용자를 로드하지 않음 (세션 선택 시에만 로드)
+        if not os.path.exists(self.face_dir):
+            os.makedirs(self.face_dir, exist_ok=True)
+            print(f"[FaceRec] Created directory: {self.face_dir}")
 
-
-    def load_known_faces(self):
-        """등록된 사용자 임베딩 로드 (user_id 기준)"""
+    def load_selected_users(self, user_ids):
+        """세션에서 선택된 사용자만 로드"""
         self.known_embeddings = []
         self.known_user_ids = []
         self.known_usernames = {}
         
-        if not os.path.exists(self.face_dir):
-            os.makedirs(self.face_dir, exist_ok=True) # 폴더가 없으면 생성하도록 수정
-            print(f"[FaceRec] Created directory: {self.face_dir}")
+        if not user_ids:
+            print("[FaceRec] No users selected")
             return
         
-        for user_id in os.listdir(self.face_dir):
+        for user_id in user_ids:
             user_path = os.path.join(self.face_dir, user_id)
             if not os.path.isdir(user_path):
+                print(f"[FaceRec] User directory not found: {user_id}")
                 continue
             
-            # user_id 기준 임베딩 파일
             emb_file = os.path.join(user_path, "embedding.npy")
             metadata_file = os.path.join(user_path, "metadata.json")
             
@@ -55,19 +54,18 @@ class FaceRecognizer:
                     self.known_embeddings.append(emb)
                     self.known_user_ids.append(user_id)
                     
-                    # 메타데이터에서 username 로드
                     if os.path.exists(metadata_file):
                         with open(metadata_file, 'r') as f:
                             metadata = json.load(f)
                             self.known_usernames[user_id] = metadata.get('username', user_id)
                     else:
                         self.known_usernames[user_id] = user_id
-                        
+                    
+                    print(f"[FaceRec] Loaded user: {user_id}")
                 except Exception as e:
                     print(f"[FaceRec] Load error {user_id}: {e}")
         
-        print(f"[FaceRec] Loaded {len(self.known_user_ids)} users")
-
+        print(f"[FaceRec] Loaded {len(self.known_user_ids)} selected users")
 
     def get_embedding(self, face_img):
         """얼굴 이미지 → 임베딩 (전처리 강화)"""
@@ -94,9 +92,8 @@ class FaceRecognizer:
         
         return self.interpreter.get_tensor(self.output_details[0]['index'])[0]
 
-    
     def register_user(self, user_id, username, image_path):
-        """이미지 파일에서 임베딩을 추출하여 저장"""
+        """이미지 파일에서 임베딩을 추출하여 저장 (파일에만 저장, 메모리 추가 안함)"""
         try:
             img = cv2.imread(image_path)
             if img is None:
@@ -110,19 +107,13 @@ class FaceRecognizer:
             img = cv2.cvtColor(img, cv2.COLOR_LAB2BGR)
             
             embedding = self.get_embedding(img)
-
-
-            # 3. 폴더 생성 (ble_gateway가 만들었겠지만 확실하게)
+            
             user_dir = os.path.join(self.face_dir, user_id)
             os.makedirs(user_dir, exist_ok=True)
-
-
-            # 4. embedding.npy 저장
+            
             emb_path = os.path.join(user_dir, "embedding.npy")
             np.save(emb_path, embedding)
-
-
-            # 5. metadata.json 저장
+            
             meta_path = os.path.join(user_dir, "metadata.json")
             metadata = {
                 "user_id": user_id,
@@ -132,26 +123,18 @@ class FaceRecognizer:
             }
             with open(meta_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
-
-
-            print(f"[FaceRec] Saved embedding and metadata for {user_id}")
-
-
-            # 6. 메모리에 즉시 반영 (재시작 없이 인식 가능하도록)
-            self.known_embeddings.append(embedding)
-            self.known_user_ids.append(user_id)
-            self.known_usernames[user_id] = username
-
-
+            
+            print(f"[FaceRec] Saved embedding for {user_id} (not loaded to memory)")
+            
+            # ✅ 메모리에 즉시 추가하지 않음 (세션 선택 시에만 로드)
             return True
-
-
+        
         except Exception as e:
             print(f"[FaceRec] Registration failed: {e}")
             import traceback
             traceback.print_exc()
             return False
-        
+    
     def recognize(self, face_crop):
         """얼굴 인식 (개선된 신뢰도 계산)"""
         if not self.known_embeddings:
@@ -165,19 +148,13 @@ class FaceRecognizer:
         sorted_sims = sorted(sims, reverse=True)
         if len(sorted_sims) > 1:
             margin = sorted_sims[0] - sorted_sims[1]
-            if margin < 0.05:  # 차이 5% 미만이면 불확실
+            if margin < 0.05:
                 return None, 0.0
         
         if best_sim > self.threshold:
             return self.known_user_ids[best_idx], best_sim
         
         return None, 0.0
-    
-    def reload_embeddings(self):
-        """새 사용자 등록 시 임베딩 재로드"""
-        print("[FaceRec] Reloading embeddings...")
-        self.load_known_faces()
-
 
     def update_username(self, user_id, new_username):
         """username 변경 (metadata.json + 메모리 갱신)"""
@@ -189,7 +166,6 @@ class FaceRecognizer:
             return False
         
         try:
-            # metadata.json 업데이트
             if os.path.exists(metadata_file):
                 with open(metadata_file, 'r') as f:
                     metadata = json.load(f)
@@ -202,19 +178,15 @@ class FaceRecognizer:
             with open(metadata_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
-            # 메모리 갱신
             if user_id in self.known_user_ids:
                 self.known_usernames[user_id] = new_username
                 print(f"[FaceRec] Username updated: {user_id} → {new_username}")
-            else:
-                print(f"[FaceRec] User {user_id} not in memory (not registered yet?)")
             
             return True
-            
+        
         except Exception as e:
             print(f"[FaceRec] Update failed: {e}")
             return False
-
 
     @staticmethod
     def _cosine_sim(a, b):
