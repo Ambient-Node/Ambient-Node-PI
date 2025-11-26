@@ -101,12 +101,18 @@ class FaceTracker:
                 if face_crop.size == 0:
                     continue
                 
-                user_id, confidence = recognizer.recognize(face_crop)
+                history = finfo.get('conf_history', [])
+                
+                user_id, confidence = recognizer.recognize(face_crop, track_history=history)
                 
                 if user_id:
-                    prev_user = finfo.get('user_id')
-                    if prev_user == user_id:
-                        confidence = min(0.95, confidence + 0.05)
+                    history.append(confidence)
+                    if len(history) > 10:
+                        history = history[-10:]
+                    finfo['conf_history'] = history
+                    
+                    if len(history) >= 3:
+                        confidence = 0.7 * confidence + 0.3 * np.mean(history[-3:])
                     
                     finfo['user_id'] = user_id
                     finfo['confidence'] = confidence
@@ -116,7 +122,6 @@ class FaceTracker:
                     newly_identified.append((fid, user_id, confidence))
             
             return newly_identified
-
 
     def get_selected_faces(self, selected_user_ids):
         """선택된 사용자 얼굴만"""

@@ -8,7 +8,7 @@ from datetime import datetime
 from tflite_runtime.interpreter import Interpreter
 
 class FaceRecognizer:
-    def __init__(self, model_path, face_dir, similarity_threshold=0.3):
+    def __init__(self, model_path, face_dir, similarity_threshold=0.36):
         self.face_dir = face_dir
         self.threshold = similarity_threshold
         self.known_embeddings = []
@@ -141,7 +141,8 @@ class FaceRecognizer:
             traceback.print_exc()
             return False
         
-    def recognize(self, face_crop):
+    def recognize(self, face_crop, track_history=None):
+        """동적 임계값 인식"""
         if not self.known_embeddings:
             return None, 0.0
         
@@ -150,16 +151,22 @@ class FaceRecognizer:
         best_idx = int(np.argmax(sims))
         best_sim = sims[best_idx]
         
-        sorted_sims = sorted(sims, reverse=True)
-        if len(sorted_sims) > 1:
-            margin = sorted_sims[0] - sorted_sims[1]
-            if margin < 0.05:  # 차이 5% 미만이면 불확실
-                return None, 0.0
+        dynamic_threshold = self.threshold
         
-        if best_sim > self.threshold:
+        if track_history and len(track_history) >= 3:
+            recent_avg = np.mean(track_history[-3:])
+            if recent_avg > 0.4:
+                dynamic_threshold *= 0.9  # 10% 완화 (0.4 → 0.36)
+        
+        sorted_sims = sorted(sims, reverse=True)
+        if len(sorted_sims) > 1 and sorted_sims[0] - sorted_sims[1] < 0.06:
+            return None, 0.0
+        
+        if best_sim > dynamic_threshold:
             return self.known_user_ids[best_idx], best_sim
         
         return None, 0.0
+
 
     
     def reload_embeddings(self):

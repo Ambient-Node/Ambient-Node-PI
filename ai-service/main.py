@@ -16,7 +16,11 @@ class AIService:
         self.config = config
         
         self.camera = CameraStream(config)
-        self.recognizer = FaceRecognizer(config.MODEL_PATH, config.FACE_DIR)
+        self.recognizer = FaceRecognizer(
+            config.MODEL_PATH, 
+            config.FACE_DIR, 
+            config.SIMILARITY_THRESHOLD
+        )
         self.tracker = FaceTracker(
             max_distance=config.MAX_MATCH_DISTANCE,
             lost_timeout=config.FACE_LOST_TIMEOUT,
