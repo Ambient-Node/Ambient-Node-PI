@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""AI Service - 메인 실행 파일 (NMS 적용 및 실시간성 최적화)"""
+"""AI Service - 메인 실행 파일 (NMS 적용 + 초당 3회 전송 제한)"""
 
 import time
 import cv2
-import numpy as np  # ✅ NMS 연산을 위한 필수 라이브러리
+import numpy as np
 import mediapipe as mp
 from config import Config
 from camera import CameraStream
@@ -12,7 +12,7 @@ from face_tracker import FaceTracker
 from mqtt_client import MQTTClient
 
 # ==========================================
-# ✅ 1. NMS (Non-Maximum Suppression) 함수 추가
+# 1. NMS (Non-Maximum Suppression) 함수
 # ==========================================
 def non_max_suppression(boxes, scores, overlap_thresh=0.3):
     """
@@ -32,7 +32,7 @@ def non_max_suppression(boxes, scores, overlap_thresh=0.3):
     y2 = boxes[:, 3]
 
     area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(scores)  # 점수 기준 정렬
+    idxs = np.argsort(scores)
 
     while len(idxs) > 0:
         last = len(idxs) - 1
@@ -77,7 +77,8 @@ class AIService:
         print(f"[AI] Config loaded:")
         print(f"  - FACE_LOST_TIMEOUT: {config.FACE_LOST_TIMEOUT}s")
         print(f"  - FACE_ID_INTERVAL: {config.FACE_ID_INTERVAL}s")
-        print(f"  - MQTT_SEND_INTERVAL: {config.MQTT_SEND_INTERVAL}s")
+        # MQTT 전송 주기는 코드에서 강제 설정하므로 로그만 출력
+        print(f"  - POSITION_SEND_RATE: 3 times/sec (approx 0.33s)")
 
     def on_mode_change(self, mode):
         print(f"[AI] Mode switched: {self.current_mode} -> {mode}")
@@ -112,7 +113,9 @@ class AIService:
         print("[AI] Service started")
         self.camera.start()
         
-        # ✅ 2. 신뢰도 상향 (0.3 -> 0.5) : 불확실한 박스 원천 차단
+        # ✅ 초당 3회 전송을 위한 간격 설정 (1초 / 3회 = 0.333...초)
+        target_send_interval = 1.0 / 3.0
+
         with mp.solutions.face_detection.FaceDetection(
             model_selection=1, min_detection_confidence=0.5
         ) as face_detection:
@@ -140,7 +143,7 @@ class AIService:
                         (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT)
                     )
 
-                    # ✅ 3. NMS가 적용된 감지 함수 사용
+                    # NMS 적용된 감지
                     detected_positions = self._detect_faces(frame_processing, face_detection)
                     
                     updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
@@ -158,16 +161,15 @@ class AIService:
                     if force_identify:
                         last_global_identify_time = current_time
                     
-                    # 신원 확인 정보 전송
+                    # 얼굴 인식 결과 전송 (DB 저장용)
                     for face_id, user_id, confidence in newly_identified:
                         self.mqtt.publish_face_detected(user_id, confidence)
                     
-                    # ✅ 4. 실시간 좌표 전송 (중복 User ID 필터링)
-                    if current_time - self.last_position_time >= self.config.MQTT_SEND_INTERVAL:
+                    # ✅ 4. 실시간 좌표 전송 (1초에 3번만 실행)
+                    if current_time - self.last_position_time >= target_send_interval:
                         session_id, selected_users = self.mqtt.get_current_session()
                         selected_faces = self.tracker.get_selected_faces(selected_users)
                         
-                        # 안전장치: 혹시라도 같은 UserID가 2개라면 하나만 전송
                         unique_users = {}
                         for face_info in selected_faces:
                             unique_users[face_info['user_id']] = face_info
@@ -208,12 +210,10 @@ class AIService:
             scores = []
             raw_detections = []
 
-            # 1단계: 모든 박스 수집
             for detection in results.detections:
                 score = detection.score[0]
                 bbox = detection.location_data.relative_bounding_box
                 
-                # Processing 해상도 기준 좌표 (NMS용)
                 x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH)
                 y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT)
                 x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH)
@@ -223,20 +223,16 @@ class AIService:
                 scores.append(score)
                 raw_detections.append(bbox)
 
-            # 2단계: NMS로 중복 제거 (핵심)
             if len(boxes) > 0:
                 boxes_np = np.array(boxes)
                 scores_np = np.array(scores)
                 
-                # IoU 0.3 (30%) 이상 겹치면 중복으로 간주하고 제거
                 picked_indices = non_max_suppression(boxes_np, scores_np, overlap_thresh=0.3)
 
-                # 3단계: 살아남은 박스만 변환 후 리스트에 추가
                 for i in picked_indices:
                     bbox_raw = raw_detections[i]
                     x1, y1, x2, y2 = boxes[i]
 
-                    # FHD 좌표계 변환 (선풍기 제어용)
                     x_center_fhd = int((bbox_raw.xmin + bbox_raw.width / 2) * self.config.PROCESSING_WIDTH * self.scale_x)
                     y_center_fhd = int((bbox_raw.ymin + bbox_raw.height / 2) * self.config.PROCESSING_HEIGHT * self.scale_y)
                     
