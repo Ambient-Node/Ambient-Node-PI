@@ -111,11 +111,14 @@ class FanService:
     def _execute_timer_shutdown(self):
         print("[FAN] ⏰ Timer finished!")
         self.hw.send_command("S 0")
-        # 타이머 종료 시 상태 초기화
-        self.is_natural_wind = False
-        self.movement_mode = "manual_control"
+        self.hw.send_command("N 0")
+        self.hw.send_command("R 0")
+        self.hw.send_command("P X")
         self.hw.send_command("A l 0")
         self.hw.send_command("A r 0")
+
+        self.is_natural_wind = False
+        self.movement_mode = "manual_control"
         self.shutdown_timer = None
 
     def _send_positions(self):
