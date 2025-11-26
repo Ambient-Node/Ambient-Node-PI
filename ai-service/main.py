@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Service - 640x480 최적화, 엄격한 감지, 유령 좌표 제거"""
+"""AI Service - 디버깅 모드 (Tracked=0 해결)"""
 
 import time
 import cv2
@@ -11,7 +11,7 @@ from face_recognition import FaceRecognizer
 from face_tracker import FaceTracker
 from mqtt_client import MQTTClient
 
-# NMS 함수 (중복 박스 제거용)
+# NMS 함수
 def non_max_suppression(boxes, scores, overlap_thresh=0.3):
     if len(boxes) == 0: return []
     if boxes.dtype.kind == "i": boxes = boxes.astype("float")
@@ -59,25 +59,21 @@ class AIService:
         
         self.current_mode = "manual_control"
         self.last_position_time = 0
-        
-        # 해상도 비율 (640->640 이므로 1.0)
         self.scale_x = config.CAMERA_WIDTH / config.PROCESSING_WIDTH
         self.scale_y = config.CAMERA_HEIGHT / config.PROCESSING_HEIGHT
         
-        print(f"[AI] Settings: 640x480 Res, Conf=0.7, MQTT=4Hz")
+        print(f"[AI] Resolution: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
 
     def on_mode_change(self, mode):
-        print(f"[AI] Mode: {self.current_mode} -> {mode}")
+        print(f"[AI] Mode: {mode}")
         self.current_mode = mode
         if mode != 'ai_tracking':
             self.tracker.reset()
         
     def on_session_update(self, session_id, user_ids):
-        print(f"[AI] Session Update: {user_ids}")
         self.recognizer.load_selected_users(user_ids)
 
     def on_user_register(self, payload):
-        # 기존과 동일
         user_id = payload.get('user_id')
         image_path = payload.get('image_path')
         username = payload.get('username')
@@ -91,16 +87,15 @@ class AIService:
             self.recognizer.known_usernames[user_id] = username
 
     def run(self):
-        print("[AI] Service started (640x480 Optimized)")
+        print("[AI] Service started")
         self.camera.start()
         
-        # ✅ 1초에 4번 전송 (0.25초)
-        target_send_interval = 0.25
+        target_send_interval = 0.25 # 4Hz
 
-        # ✅ 감지 기준 상향: 0.3 -> 0.7 (유령 박스, 다중 인식 방지)
+        # ✅ 수정 1: Confidence를 0.7 -> 0.5로 낮춤 (640해상도에서 0.7은 너무 높을 수 있음)
         with mp.solutions.face_detection.FaceDetection(
-            model_selection=0, # 0: 근거리(2m이내, 640해상도 적합), 1: 원거리
-            min_detection_confidence=0.7 
+            model_selection=0, # 0: 2m 이내 근거리 (640해상도용)
+            min_detection_confidence=0.5 
         ) as face_detection:
             
             last_global_identify_time = 0
@@ -121,19 +116,16 @@ class AIService:
                         time.sleep(0.001)
                         continue
                     
-                    # 640x480은 리사이즈 없이 바로 처리 가능 (빠름)
+                    # 640x480 일치 시 리사이즈 불필요
                     frame_processing = frame
                     if self.config.CAMERA_WIDTH != self.config.PROCESSING_WIDTH:
                         frame_processing = cv2.resize(frame, 
                             (self.config.PROCESSING_WIDTH, self.config.PROCESSING_HEIGHT))
 
-                    # 1. 얼굴 감지 (NMS 적용)
                     detected_positions = self._detect_faces(frame_processing, face_detection)
                     
-                    # 2. 트래커 업데이트
                     updated_ids, lost_faces = self.tracker.update(detected_positions, current_time)
                 
-                    # 3. 신원 확인
                     force_identify = (current_time - last_global_identify_time >= self.config.FACE_ID_INTERVAL)
                     newly_identified = self.tracker.identify_faces(
                         self.recognizer, frame_processing, current_time,
@@ -145,20 +137,15 @@ class AIService:
                     for _, user_id, confidence in newly_identified:
                         self.mqtt.publish_face_detected(user_id, confidence)
                     
-                    # ✅ 4. MQTT 좌표 전송 (엄격한 필터링 적용)
                     if current_time - self.last_position_time >= target_send_interval:
                         session_id, selected_users = self.mqtt.get_current_session()
                         
-                        # 트래커에서 얼굴 정보를 가져오되...
                         tracked_faces = self.tracker.get_selected_faces(selected_users)
                         
                         unique_users = {}
                         for finfo in tracked_faces:
-                            # [핵심] 유령 좌표 방지 로직
-                            # 얼굴이 "최근 0.3초 이내"에 실제로 감지된 경우에만 전송
-                            # 트래커 메모리에 있어도, 카메라에 안 보이면 전송 안 함
-                            time_since_seen = current_time - finfo['last_seen']
-                            if time_since_seen < 0.3:
+                            # 유령 좌표 방지 (최근 0.3초 이내만 전송)
+                            if current_time - finfo['last_seen'] < 0.3:
                                 unique_users[finfo['user_id']] = finfo
                         
                         for user_id, finfo in unique_users.items():
@@ -170,13 +157,13 @@ class AIService:
                     for lost_info in lost_faces:
                         self.mqtt.publish_face_lost(lost_info['user_id'], lost_info['duration'])
                     
-                    # FPS
                     frame_count += 1
                     if frame_count % 30 == 0:
                         elapsed = time.time() - fps_start
                         fps = 30 / elapsed
                         fps_start = time.time()
-                        print(f"[INFO] FPS: {fps:.1f} | Tracked: {len(self.tracker.tracked_faces)}")
+                        # ✅ 디버깅용: 감지된 얼굴 수 출력
+                        print(f"[INFO] FPS: {fps:.1f} | Raw Detect: {len(detected_positions)} | Tracked: {len(self.tracker.tracked_faces)}")
                     
                     time.sleep(0.001)
             
@@ -200,7 +187,6 @@ class AIService:
                 score = detection.score[0]
                 bbox = detection.location_data.relative_bounding_box
                 
-                # 좌표 계산
                 x1 = int(bbox.xmin * self.config.PROCESSING_WIDTH)
                 y1 = int(bbox.ymin * self.config.PROCESSING_HEIGHT)
                 x2 = int((bbox.xmin + bbox.width) * self.config.PROCESSING_WIDTH)
@@ -214,7 +200,7 @@ class AIService:
                 boxes_np = np.array(boxes)
                 scores_np = np.array(scores)
                 
-                # NMS 실행 (중복 제거)
+                # NMS 실행
                 picked_indices = non_max_suppression(boxes_np, scores_np, overlap_thresh=0.3)
 
                 for i in picked_indices:
