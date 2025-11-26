@@ -1,31 +1,33 @@
-"""설정 관리 (640x480 최적화 및 기준 상향)"""
+"""설정 관리 (FHD 복구 & 반응속도 최적화)"""
 import os
 
 class Config:
-    # TCP 설정
+    # TCP 연결
     TCP_IP = 'localhost'
     TCP_PORT = 8888
     
-    CAMERA_WIDTH = 640
-    CAMERA_HEIGHT = 480
-    PROCESSING_WIDTH = 640   # 입력과 동일하게 설정하여 리사이즈 부하 최소화
-    PROCESSING_HEIGHT = 480
+    # ✅ 1. 해상도: 입력은 FHD, 처리는 640x360 (16:9 비율 유지)
+    CAMERA_WIDTH = 1920
+    CAMERA_HEIGHT = 1080
+    PROCESSING_WIDTH = 640
+    PROCESSING_HEIGHT = 360
                         
-    # 타이밍
-    MQTT_SEND_INTERVAL = 0.25 
-    FACE_ID_INTERVAL = 0.5     # 신원 확인 주기
+    # ✅ 2. 전송 주기: 0.25초 (4Hz)
+    MQTT_SEND_INTERVAL = 0.25
+    FACE_ID_INTERVAL = 0.5
     
-    FACE_LOST_TIMEOUT = 1.0    # 1초만 안 보여도 추적 중단 (기존 8초 -> 1초)
-    MIN_FACE_SIZE = 0          # 자동
+    # ✅ 3. 트래킹 설정 (유령 좌표 방지)
+    FACE_LOST_TIMEOUT = 0.5   # 0.5초만 안 보여도 즉시 삭제
+    MAX_MATCH_DISTANCE = 150  # FHD 해상도에서의 거리 오차 허용 범위
     
-    # 모델 설정
-    SIMILARITY_THRESHOLD = 0.4 
-    MAX_MATCH_DISTANCE = 150   # 640해상도에 맞춰 거리 기준 축소 (300 -> 150)
+    # 모델 관련
+    MIN_FACE_SIZE = 0
+    SIMILARITY_THRESHOLD = 0.4
     
     # 경로
     SAVE_DIR = os.getenv('SAVE_DIR', '/var/lib/ambient-node/captures')
     FACE_DIR = os.getenv('FACE_DIR', '/var/lib/ambient-node/users')
-    MODEL_PATH = os.getenv('TFLITE_MODEL', '/app/facenet.tflite') # FaceNet 복귀
+    MODEL_PATH = os.getenv('TFLITE_MODEL', '/app/facenet.tflite')
     
     # MQTT
     BROKER = os.getenv('MQTT_BROKER', 'localhost')
