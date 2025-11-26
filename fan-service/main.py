@@ -93,9 +93,6 @@ class FanService:
             user_id = payload.get("user_id")
             if user_id in self.last_sent_positions:
                 del self.last_sent_positions[user_id]
-                # 팬을 정지(예시)
-                if self.movement_mode == "ai_tracking":
-                    self.hw.send_command("P X")
 
     def _handle_timer(self, payload):
         try:
