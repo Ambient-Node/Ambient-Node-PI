@@ -1,6 +1,7 @@
 """얼굴 추적 관리"""
 
 import threading
+import numpy as np
 
 class FaceTracker:
     def __init__(self, max_distance=300, lost_timeout=8.0, enable_display=True):

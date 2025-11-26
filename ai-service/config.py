@@ -19,9 +19,10 @@ class Config:
     FACE_LOST_TIMEOUT = 8.0
     
     # 얼굴 감지
-    MIN_FACE_SIZE = 800
-    SIMILARITY_THRESHOLD = 0.4
-    MAX_MATCH_DISTANCE = 300
+    MIN_FACE_SIZE = 600      # 800 → 600 (작은 얼굴 감지)
+    SIMILARITY_THRESHOLD = 0.36  # 0.4 → 0.36 (65% 성능 핵심)
+    FACE_ID_INTERVAL = 0.8       # 1.0 → 0.8 (인식 빈도 +25%)
+    MAX_MATCH_DISTANCE = 250     # 300 → 250 (추적 안정화)
     
     # 경로
     SAVE_DIR = os.getenv('SAVE_DIR', '/var/lib/ambient-node/captures')

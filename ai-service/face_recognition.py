@@ -98,6 +98,7 @@ class FaceRecognizer:
             if img is None:
                 return False
             
+            # ✅ 등록 시에도 전처리 적용 (get_embedding과 동일)
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))

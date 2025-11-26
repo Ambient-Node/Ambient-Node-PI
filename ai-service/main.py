@@ -50,9 +50,10 @@ class AIService:
         os.makedirs(csv_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.csv_file = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
+        csv_path = os.path.join(csv_dir, f"ai_accuracy_{timestamp}.csv")
         
-        self.csv_writer = csv.writer(open(self.csv_file, 'w', newline=''))
+        self.csv_file = open(csv_path, 'w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow([
             'timestamp', 'trial', 'user_id', 'confidence', 'fps', 
             'num_tracked', 'mode', 'session_id', 'face_count'
