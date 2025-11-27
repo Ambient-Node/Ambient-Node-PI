@@ -9,7 +9,7 @@ class Config:
     MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "fan-service")
 
     SERIAL_PORT = os.getenv("SERIAL_PORT", "/dev/ttyAMA0")
-    SERIAL_BAUDRATE = int(os.getenv("SERIAL_BAUDRATE", "9600"))
+    SERIAL_BAUDRATE = int(os.getenv("SERIAL_BAUDRATE", "921600"))
 
     # 데이터 디렉토리
     DATA_DIR = Path("/var/lib/ambient-node")
