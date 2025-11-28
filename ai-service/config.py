@@ -10,7 +10,7 @@ class Config:
     PROCESSING_WIDTH = 640
     PROCESSING_HEIGHT = 360
                         
-    MQTT_SEND_INTERVAL = 0.25
+    MQTT_SEND_INTERVAL = 1.0 / 6.0 # 1초에 6번 보내게 수정함
     FACE_ID_INTERVAL = 0.5
     FACE_LOST_TIMEOUT = 0.5
     MAX_MATCH_DISTANCE = 150
