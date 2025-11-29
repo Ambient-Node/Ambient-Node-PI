@@ -16,7 +16,7 @@ class Config:
     MAX_MATCH_DISTANCE = 150
     MIN_FACE_SIZE = 0
     
-    SIMILARITY_THRESHOLD = 0.6
+    SIMILARITY_THRESHOLD = 0.7
     
     SAVE_DIR = os.getenv('SAVE_DIR', '/var/lib/ambient-node/captures')
     FACE_DIR = os.getenv('FACE_DIR', '/var/lib/ambient-node/users')
