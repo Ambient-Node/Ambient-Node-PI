@@ -156,7 +156,26 @@ class EventHandlers:
         """
         self.db.execute(query, (username, timestamp, user_id))
         print(f"[Handler] User updated: {user_id} -> {username}")
+        pass
 
+    def handle_user_delete(self, payload):
+        user_id = payload.get('user_id')
+        timestamp = payload.get('timestamp')
+        
+        try:
+            self.db.execute("DELETE FROM device_events WHERE user_id = %s", (user_id,))
+            
+            self.db.execute("""
+                UPDATE user_sessions 
+                SET selected_user_ids = array_remove(selected_user_ids, %s)
+                WHERE %s = ANY(selected_user_ids)
+            """, (user_id, user_id))
+            
+            self.db.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+            print(f"[Handler] User deleted from DB: {user_id}")
+            
+        except Exception as e:
+            print(f"[Handler] Failed to delete user {user_id}: {e}")
 
     def handle_speed_change(self, payload):
         """풍속 변경"""

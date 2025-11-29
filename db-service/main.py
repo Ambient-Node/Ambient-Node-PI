@@ -32,6 +32,8 @@ class DBService:
                 self.handlers.handle_user_register(payload)
             elif topic == "ambient/user/select":
                 self.handlers.handle_user_select(payload)
+            elif topic == "ambient/user/delete":
+                self.handlers.handle_user_delete(payload)
             elif topic == "ambient/user/update":
                 self.handlers.handle_user_update(payload)
             elif topic == "ambient/command/speed":

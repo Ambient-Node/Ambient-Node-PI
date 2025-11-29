@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE Gateway Service - user_list 처리 및 user_id 직접 수신 지원"""
+"""BLE Gateway Service - 사용자 등록/삭제 및 ACK 처리 완벽 구현"""
 
 import base64
 import os
@@ -9,10 +9,10 @@ import time
 import signal
 import sys
 import uuid
+import shutil
 from datetime import datetime
 from PIL import Image
 import io
-
 
 try:
     import dbus
@@ -32,7 +32,6 @@ except ImportError as e:
     print(f"[ERROR] MQTT library not available: {e}")
     sys.exit(1)
 
-# Configuration
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = "ble-gateway"
@@ -41,16 +40,13 @@ WRITE_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
 NOTIFY_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2'
 DEVICE_NAME = 'AmbientNode'
 
-# Global state
 _notify_char = None
 _mqtt_client = None
 _agent_path = '/ambient/agent'
 
-# 청크 수신 버퍼
 _chunk_buffer = []
 _expected_total = 0
 
-# 이미지 저장 경로
 USER_IMAGES_DIR = "/var/lib/ambient-node/users"
 
 class PairingAgent(dbus.service.Object):
@@ -132,14 +128,25 @@ def send_notification(data: dict):
 def extract_user_id(payload: dict) -> str:
     if 'user_id' in payload and payload['user_id']:
         return payload['user_id']
-
     user_list = payload.get('user_list', [])
     if user_list and isinstance(user_list, list) and len(user_list) > 0:
         first_user = user_list[0]
         if isinstance(first_user, dict):
             return first_user.get('user_id')
-            
     return None
+
+def send_ack(action, user_id=None, success=True, error=None):
+    payload = {
+        "type": "ACK",
+        "action": action,
+        "success": success
+    }
+    if user_id:
+        payload["user_id"] = user_id
+    if error:
+        payload["error"] = error
+        
+    send_notification(payload)
 
 def process_complete_data(data_str):
     global _mqtt_client
@@ -148,10 +155,12 @@ def process_complete_data(data_str):
         payload = json.loads(data_str)
     except json.JSONDecodeError as e:
         print(f'[WARN] JSON parse error: {e}')
+        send_notification({"type": "ERROR", "message": "Invalid JSON"})
         return
 
     timestamp = datetime.now().isoformat()
     action = payload.get('action', '')
+    
     user_id = extract_user_id(payload)
     
     topic = None
@@ -159,13 +168,10 @@ def process_complete_data(data_str):
 
     if action == 'user_register':
         register_user_id = payload.get('user_id')
-        if not register_user_id:
-            register_user_id = f"user_{int(time.time())}"
-            
         username = payload.get('username', 'Unknown')
         base64_img = payload.get('image_base64')
         
-        print(f'[BLE] Processing registration for: {username} ({register_user_id})')
+        print(f'[BLE] Registering: {username} ({register_user_id})')
         
         image_path = ""
         if base64_img:
@@ -180,11 +186,38 @@ def process_complete_data(data_str):
             "image_path": image_path,
             "timestamp": timestamp
         }
+        
+        send_ack("user_register", user_id=register_user_id, success=True)
+
+    elif action == 'user_delete':
+        if user_id:
+            print(f'[BLE] Deleting user: {user_id}')
+            user_dir = os.path.join(USER_IMAGES_DIR, user_id)
+            
+            try:
+                if os.path.exists(user_dir):
+                    shutil.rmtree(user_dir)
+                    print(f'[BLE] Directory deleted: {user_dir}')
+                
+                topic = "ambient/user/delete"
+                mqtt_payload = {
+                    "user_id": user_id,
+                    "timestamp": timestamp
+                }
+                
+                send_ack("user_delete", user_id=user_id, success=True)
+                
+            except Exception as e:
+                print(f'[BLE] Delete failed: {e}')
+                send_ack("user_delete", user_id=user_id, success=False, error=str(e))
+                return
+        else:
+            print('[WARN] User delete missing user_id')
+            return
 
     elif action == 'user_update':
         username = payload.get('username', 'Unknown')
         base64_img = payload.get('image_base64')
-        
         print(f'[BLE] Processing update for: {username} ({user_id})')
         
         image_path = ""
@@ -201,104 +234,47 @@ def process_complete_data(data_str):
             "timestamp": timestamp
         }
 
-    elif action == 'user_delete':
-        topic = "ambient/user/delete"
-        mqtt_payload = {
-            "user_id": user_id,
-            "timestamp": timestamp
-        }
-        print(f'[BLE] User delete: {user_id}')
+    elif action == 'mode_change':
+        mode = payload.get('mode', 'manual_control')
+        cmd_type = payload.get('type', 'motor')
+        topic = "ambient/command/mode"
+        mqtt_payload = {"event_type": "mode_change", "type": cmd_type, "mode": mode, "user_id": user_id, "timestamp": timestamp}
+        send_ack("mode_change", user_id, True)
 
     elif action == 'speed_change':
         speed = payload.get('speed', 0)
-        
         topic = "ambient/command/speed"
-        mqtt_payload = {
-            "event_type": "speed_change",
-            "speed": speed,
-            "user_id": user_id, 
-            "timestamp": timestamp
-        }
-        print(f'[BLE] Speed: {speed} (user: {user_id})')
+        mqtt_payload = {"event_type": "speed_change", "speed": speed, "user_id": user_id, "timestamp": timestamp}
+        send_ack("speed_change", user_id, True)
 
     elif action == 'direction_change':
         direction = payload.get('direction', 'center')
         toggle_on = payload.get('toggleOn', 0)
-        
         topic = "ambient/command/direction"
-        mqtt_payload = {
-            "event_type": "direction_change",
-            "direction": direction,
-            "toggleOn": toggle_on,
-            "user_id": user_id, 
-            "timestamp": timestamp
-        }
-        print(f'[BLE] direction: {direction} (user: {user_id})')
-
-    elif action == 'mode_change':
-        mode = payload.get('mode', 'manual_control')
-        cmd_type = payload.get('type', 'motor') 
-        
-        topic = "ambient/command/mode"
-        mqtt_payload = {
-            "event_type": "mode_change",
-            "type": cmd_type,  # motor | wind
-            "mode": mode,
-            "user_id": user_id,
-            "timestamp": timestamp
-        }
-        print(f'[BLE] Mode Change: {mode} (Type: {cmd_type})')
-        
-    elif action == 'timer':
-        duration_sec = payload.get('duration_sec', 0)
-        
-        topic = "ambient/command/timer"
-        mqtt_payload = {
-            "event_type": "timer",
-            "duration_sec": duration_sec,
-            "user_id": user_id,
-            "timestamp": timestamp
-        }
-        print(f'[BLE] User select: {len(user_id)}')
+        mqtt_payload = {"event_type": "direction_change", "direction": direction, "toggleOn": toggle_on, "user_id": user_id, "timestamp": timestamp}
+        send_ack("direction_change", user_id, True)
 
     elif action == 'user_select':
         user_list = payload.get('user_list', [])
-        
         topic = "ambient/user/select"
-        mqtt_payload = {
-            "event_type": "user_select",
-            "user_list": user_list,
-            "timestamp": timestamp
-        }
-        print(f'[BLE] User select: {len(user_list)} users')
-        
-    
+        mqtt_payload = {"event_type": "user_select", "user_list": user_list, "timestamp": timestamp}
+        send_ack("user_select", user_id, True)
         
     elif action == 'shutdown':
         os.system('sudo shutdown -h now')
+        return
 
     elif action == 'mqtt_publish':
-        req_topic = payload.get('topic')
-        req_payload = payload.get('payload')
-        
-        if req_topic and req_payload:
-            topic = req_topic
-            mqtt_payload = req_payload
-            print(f'[BLE] Proxying MQTT to: {topic}')
-        else:
-            print('[WARN] mqtt_publish missing topic or payload')
-            return
-        
+        topic = payload.get('topic')
+        mqtt_payload = payload.get('payload')
+
     else:
         print(f'[WARN] Unknown action: {action}')
         return
 
     if _mqtt_client and _mqtt_client.is_connected() and topic:
         _mqtt_client.publish(topic, json.dumps(mqtt_payload), qos=1)
-        print(f'[MQTT] Published to {topic}: {mqtt_payload}')
-        
-        if action in ['speed_change', 'direction_change', 'mode_change', 'user_select']:
-            send_notification({"type": "ACK", "action": action, "success": True})
+        print(f'[MQTT] Published to {topic}')
 
 def on_write_characteristic(value, options):
     global _chunk_buffer, _expected_total
@@ -332,9 +308,6 @@ def on_write_characteristic(value, options):
 
                     if 0 <= current_idx < total_chunks:
                         _chunk_buffer[current_idx] = chunk_data
-                        if total_chunks > 10:
-                            if current_idx % (total_chunks // 10) == 0: print(f'[BLE] Chunk {current_idx + 1}/{total_chunks}')
-                        else: print(f'[BLE] Chunk {current_idx + 1}/{total_chunks}')
 
                     if all(_chunk_buffer):
                         print(f'[BLE] All chunks assembled (Auto).')
@@ -379,7 +352,6 @@ def setup_gatt_and_advertising():
     ad_manager = peripheral.advertisement.AdvertisingManager(adapter_obj.address)
     ad_manager.register_advertisement(advert, {})
     print(f'[BLE] Advertising as "{DEVICE_NAME}"')
-    print(f'[BLE] Using adapter: {adapter_obj.address}')
     
     threading.Thread(target=lambda: app.start(), daemon=True).start()
     

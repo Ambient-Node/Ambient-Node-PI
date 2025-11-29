@@ -22,6 +22,7 @@ class MQTTClient:
             "ambient/user/register",
             "ambient/user/select",
             "ambient/user/update",
+            "ambient/user/delete",
             "ambient/command/speed",
             "ambient/command/direction",
             "ambient/command/mode",
