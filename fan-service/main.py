@@ -14,9 +14,9 @@ class FanService:
         self.tracked_positions = {}
         self.last_sent_positions = {}
         
-        # 상태 변수
-        self.movement_mode = "manual_control"  # motor: ai_tracking, rotation, manual_control
-        self.is_natural_wind = False           # wind: True(natural), False(normal)
+        # 상태 변수 (서로 독립적)
+        self.movement_mode = "manual_control" # 오직 motor type에 의해서만 변경됨
+        self.is_natural_wind = False          # 오직 wind type에 의해서만 변경됨
         
         self.shutdown_timer = None
         self.hw = FanHardware(config, self.on_arduino_status)
@@ -29,44 +29,48 @@ class FanService:
             cmd_type = payload.get("type", "motor") 
             mode = payload.get("mode")
             
+            # [CASE 1] 모터 움직임 제어 (회전, 트래킹)
             if cmd_type == "motor":
+                # 모터 모드가 실제로 바뀔 때만 동작
                 if self.movement_mode != mode:
                     print(f"[FAN] 🔄 Movement Change: {self.movement_mode} -> {mode}")
-                    self.movement_mode = mode
+                    self.movement_mode = mode # 상태 업데이트
                     
                     if mode == "rotation":
-                        self.hw.send_command("P X") # 트래킹 중지
-                        self.hw.send_command("R 1") # 회전 시작
+                        self.hw.send_command("P X") # 트래킹 끄고
+                        self.hw.send_command("R 1") # 회전 켜기
                     elif mode == "ai_tracking":
-                        self.hw.send_command("R 0") # 회전 중지
-                        self.last_sent_positions.clear() # 위치 전송 즉시 시작 유도
+                        self.hw.send_command("R 0") # 회전 끄고
+                        self.last_sent_positions.clear() # 트래킹 준비
                     elif mode == "manual_control":
                         self.hw.send_command("R 0")
                         self.hw.send_command("P X")
             
+            # [CASE 2] 바람 제어 (자연풍) -> 모터 상태(self.movement_mode)는 건드리지 않음!
             elif cmd_type == "wind":
                 if mode == "natural_wind":
-                    if not self.is_natural_wind:
-                        self.hw.send_command("N 1")
-                        self.is_natural_wind = True
-                        print("[FAN] 🍃 Natural Wind ON")
-                        
-                        if self.movement_mode == "ai_tracking":
-                            self.hw.send_command("R 0")
-                        elif self.movement_mode == "rotation":
-                            self.hw.send_command("R 1")
+                    self.hw.send_command("N 1")
+                    self.is_natural_wind = True
+                    print("[FAN] 🍃 Natural Wind ON")
+                    
+                    # [하드웨어 보정] 자연풍 켤 때 모터가 멈추는 하드웨어 이슈 방지용 (상태 재전송)
+                    if self.movement_mode == "ai_tracking":
+                        self.hw.send_command("R 0") # 트래킹 모드 유지 신호
+                    elif self.movement_mode == "rotation":
+                        self.hw.send_command("R 1") # 회전 모드 유지 신호
 
                 elif mode == "normal_wind":
-                    if self.is_natural_wind:
-                        self.hw.send_command("N 0")
-                        self.is_natural_wind = False
-                        print("[FAN] 🍃 Natural Wind OFF")
+                    self.hw.send_command("N 0")
+                    self.is_natural_wind = False
+                    print("[FAN] 🍃 Natural Wind OFF")
+                    # 속도 복구는 앱에서 별도로 speed_change를 보내주므로 여기선 신경 안 씀
 
         elif topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
             self.hw.send_command(f"S {level}")
             
         elif topic == "ambient/command/direction":
+            # 방향 조작 시에는 매뉴얼 모드로 변경하는 것이 안전함
             if self.movement_mode != "manual_control":
                 self.movement_mode = "manual_control"
                 self.hw.send_command("R 0")
@@ -80,6 +84,7 @@ class FanService:
             self._handle_timer(payload)
             
         elif topic == "ambient/ai/face-position":
+            # [중요] AI 트래킹 모드일 때만 좌표 명령 수행
             if self.movement_mode == "ai_tracking":
                 user_id = payload.get("user_id")
                 x = payload.get("x")
