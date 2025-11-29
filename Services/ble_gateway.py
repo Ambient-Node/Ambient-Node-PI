@@ -104,9 +104,7 @@ def on_mqtt_connect(client, userdata, flags, reason_code, properties):
 def on_mqtt_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        if msg.topic == "ambient/user/register-ack":
-            send_notification({"type": "REGISTER_ACK", "success": payload.get('success', False), "user_id": payload.get('user_id'), "error": payload.get('error')})
-        elif msg.topic == "ambient/ai/face-detected":
+        if msg.topic == "ambient/ai/face-detected":
             send_notification({"type": "FACE_DETECTED", "user_id": payload.get('user_id')})
         elif msg.topic == "ambient/session/active":
              send_notification({"type": "SESSION_UPDATE", "session_id": payload.get('session_id'), "user_list": payload.get('user_list')})
