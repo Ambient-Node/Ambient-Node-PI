@@ -14,8 +14,11 @@ class FanService:
         self.running = True
         self.tracked_positions = {}
         self.last_sent_positions = {}
+        
+        # 상태 변수
         self.movement_mode = "manual_control"  # motor: ai_tracking, rotation, manual_control
         self.is_natural_wind = False           # wind: True(natural), False(normal)
+        self.current_speed = 0                 # 현재 일반풍 속도 저장용
         
         self.shutdown_timer = None
         self.hw = FanHardware(config, self.on_arduino_status)
@@ -31,35 +34,39 @@ class FanService:
             if cmd_type == "motor":
                 if self.movement_mode != mode:
                     print(f"[FAN] 🔄 Movement Change: {self.movement_mode} -> {mode}")
+                    self.movement_mode = mode
                     
                     if mode == "rotation":
                         self.hw.send_command("P X")
                         self.hw.send_command("R 1")
-                        self.movement_mode = "rotation"
-                        
                     elif mode == "ai_tracking":
                         self.hw.send_command("R 0")
-                        self.movement_mode = "ai_tracking"
-                        
+                        self.last_sent_positions.clear() 
                     elif mode == "manual_control":
                         self.hw.send_command("R 0")
                         self.hw.send_command("P X")
-                        self.movement_mode = "manual_control"
             
             elif cmd_type == "wind":
                 if mode == "natural_wind":
-                    if not self.is_natural_wind:
-                        self.hw.send_command("N 1")
-                        self.is_natural_wind = True
-                        print("[FAN] 🍃 Natural Wind ON (HW handled)")
+                    self.hw.send_command("N 1")
+                    self.is_natural_wind = True
+                    print("[FAN] 🍃 Natural Wind ON")
                 else:
                     if self.is_natural_wind:
                         self.hw.send_command("N 0")
                         self.is_natural_wind = False
-                        print("[FAN] 🍃 Natural Wind OFF")
+                        
+                        print(f"[FAN] 🍃 Natural Wind OFF -> Restoring Speed: {self.current_speed}")
+                        self.hw.send_command(f"S {self.current_speed}")
+
+                if self.movement_mode == "ai_tracking":
+                    self.hw.send_command("R 0")
+                elif self.movement_mode == "rotation":
+                    self.hw.send_command("R 1")
 
         elif topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
+            self.current_speed = level
             self.hw.send_command(f"S {level}")
             
         elif topic == "ambient/command/direction":
@@ -120,21 +127,16 @@ class FanService:
 
         self.is_natural_wind = False
         self.movement_mode = "manual_control"
+        self.current_speed = 0  # 타이머 종료 시 저장된 속도도 초기화
         self.shutdown_timer = None
 
     def _send_positions(self):
         if not self.tracked_positions:
-            # self.hw.send_command("P X")
             return
         positions = list(self.tracked_positions.values())
-        
         if len(positions) == 1:
             x, y = positions[0]
             self.hw.send_command(f"P ({x},{y})")
-        elif len(positions) == 2:
-            x1, y1 = positions[0]
-            x2, y2 = positions[1]
-            self.hw.send_command(f"P ({x1},{y1}) ({x2},{y2})")
     
     def on_arduino_status(self, line: str):
         if line.startswith("STATUS"):
@@ -149,7 +151,6 @@ class FanService:
     
     def stop(self):
         self.running = False
-        self.effect_running = False
         if self.shutdown_timer:
             self.shutdown_timer.cancel()
         self.hw.cleanup()
