@@ -106,13 +106,12 @@ class AIService:
                         continue
                     
                     # 1. 원본 프레임 가져오기 (1920x1080)
-                    frame = self.camera.get_frame() 
+                    frame = self.camera.get_frame()
                     if frame is None:
                         time.sleep(0.001)
                         continue
                     
-                    # ✅ [핵심] 가져오자마자 180도 회전 (모든 좌표계 정상화)
-                    frame = cv2.rotate(frame, cv2.ROTATE_180)
+                    # frame = cv2.rotate(frame, cv2.ROTATE_180)
                     
                     current_time = time.time()
                     
