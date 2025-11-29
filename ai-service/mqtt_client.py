@@ -106,11 +106,12 @@ class MQTTClient:
                 else:
                     print("[MQTT] on_user_update callback not set")
             
-            elif msg.topic == "ambient/command/mode":
-                mode = payload.get('mode')
-                print(f"[MQTT] Mode changed: {mode}")
-                if self.on_mode_change:
-                    self.on_mode_change(mode)
+            if msg.topic == "ambient/command/mode":
+                # type이 'motor'인 경우에만 AI 모드 변경으로 인식
+                if payload.get("type", "motor") == "motor":
+                    self.on_mode_change(payload)
+                else:
+                    print(f"[AI] Ignoring mode change (type: {payload.get('type')})")
                     
         except Exception as e:
             print(f"[MQTT] Error: {e}")

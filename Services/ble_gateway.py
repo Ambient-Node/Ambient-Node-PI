@@ -148,12 +148,10 @@ def process_complete_data(data_str):
         payload = json.loads(data_str)
     except json.JSONDecodeError as e:
         print(f'[WARN] JSON parse error: {e}')
-        send_notification({"type": "ERROR", "message": "Invalid JSON"})
         return
 
     timestamp = datetime.now().isoformat()
     action = payload.get('action', '')
-    
     user_id = extract_user_id(payload)
     
     topic = None
@@ -238,17 +236,18 @@ def process_complete_data(data_str):
         print(f'[BLE] direction: {direction} (user: {user_id})')
 
     elif action == 'mode_change':
-        mode = payload.get('mode', 'manual')
-        cmd_type = payload.get('type')
+        mode = payload.get('mode', 'manual_control')
+        cmd_type = payload.get('type', 'motor') 
         
         topic = "ambient/command/mode"
         mqtt_payload = {
             "event_type": "mode_change",
-            "type": cmd_type,          
+            "type": cmd_type,  # motor | wind
             "mode": mode,
             "user_id": user_id,
             "timestamp": timestamp
         }
+        print(f'[BLE] Mode Change: {mode} (Type: {cmd_type})')
         
     elif action == 'timer':
         duration_sec = payload.get('duration_sec', 0)

@@ -3,7 +3,6 @@ import signal
 import time
 import sys
 import threading
-import random
 from config import Config
 from hardware import FanHardware
 from mqtt_client import FanMQTTClient
@@ -18,7 +17,6 @@ class FanService:
         # 상태 변수
         self.movement_mode = "manual_control"  # motor: ai_tracking, rotation, manual_control
         self.is_natural_wind = False           # wind: True(natural), False(normal)
-        self.current_speed = 0                 # 현재 일반풍 속도 저장용
         
         self.shutdown_timer = None
         self.hw = FanHardware(config, self.on_arduino_status)
@@ -28,7 +26,7 @@ class FanService:
         print(f"[MQTT] 📥 {topic}: {payload}")
         
         if topic == "ambient/command/mode":
-            cmd_type = payload.get("type") # 'motor' or 'wind'
+            cmd_type = payload.get("type", "motor") 
             mode = payload.get("mode")
             
             if cmd_type == "motor":
@@ -37,41 +35,39 @@ class FanService:
                     self.movement_mode = mode
                     
                     if mode == "rotation":
-                        self.hw.send_command("P X")
-                        self.hw.send_command("R 1")
+                        self.hw.send_command("P X") # 트래킹 중지
+                        self.hw.send_command("R 1") # 회전 시작
                     elif mode == "ai_tracking":
-                        self.hw.send_command("R 0")
-                        self.last_sent_positions.clear() 
+                        self.hw.send_command("R 0") # 회전 중지
+                        self.last_sent_positions.clear() # 위치 전송 즉시 시작 유도
                     elif mode == "manual_control":
                         self.hw.send_command("R 0")
                         self.hw.send_command("P X")
             
             elif cmd_type == "wind":
                 if mode == "natural_wind":
-                    self.hw.send_command("N 1")
-                    self.is_natural_wind = True
-                    print("[FAN] 🍃 Natural Wind ON")
-                else:
+                    if not self.is_natural_wind:
+                        self.hw.send_command("N 1")
+                        self.is_natural_wind = True
+                        print("[FAN] 🍃 Natural Wind ON")
+                        
+                        if self.movement_mode == "ai_tracking":
+                            self.hw.send_command("R 0")
+                        elif self.movement_mode == "rotation":
+                            self.hw.send_command("R 1")
+
+                elif mode == "normal_wind":
                     if self.is_natural_wind:
                         self.hw.send_command("N 0")
                         self.is_natural_wind = False
-                        
-                        print(f"[FAN] 🍃 Natural Wind OFF -> Restoring Speed: {self.current_speed}")
-                        self.hw.send_command(f"S {self.current_speed}")
-
-                if self.movement_mode == "ai_tracking":
-                    self.hw.send_command("R 0")
-                elif self.movement_mode == "rotation":
-                    self.hw.send_command("R 1")
+                        print("[FAN] 🍃 Natural Wind OFF")
 
         elif topic == "ambient/command/speed":
             level = int(payload.get("speed", 0))
-            self.current_speed = level
             self.hw.send_command(f"S {level}")
             
         elif topic == "ambient/command/direction":
             if self.movement_mode != "manual_control":
-                print("[FAN] Direction cmd received. Force switching to manual.")
                 self.movement_mode = "manual_control"
                 self.hw.send_command("R 0")
                 self.hw.send_command("P X")
@@ -127,17 +123,8 @@ class FanService:
 
         self.is_natural_wind = False
         self.movement_mode = "manual_control"
-        self.current_speed = 0  # 타이머 종료 시 저장된 속도도 초기화
         self.shutdown_timer = None
 
-    def _send_positions(self):
-        if not self.tracked_positions:
-            return
-        positions = list(self.tracked_positions.values())
-        if len(positions) == 1:
-            x, y = positions[0]
-            self.hw.send_command(f"P ({x},{y})")
-    
     def on_arduino_status(self, line: str):
         if line.startswith("STATUS"):
             parts = line.split()
@@ -156,14 +143,11 @@ class FanService:
         self.hw.cleanup()
         self.mqtt.disconnect()
 
-service = None
-
 def signal_handler(sig, frame):
-    global service
-    if service:
-        service.stop()
+    if service: service.stop()
     sys.exit(0)
 
+service = None
 def main():
     global service
     print("Fan Service Starting...")
