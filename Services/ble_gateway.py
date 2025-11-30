@@ -10,7 +10,7 @@ import signal
 import sys
 import uuid
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image
 import io
 
@@ -133,7 +133,7 @@ def extract_user_id(payload: dict) -> str:
             return first_user.get('user_id')
     return None
 
-def send_ack(action, user_id=None, success=True, error=None):
+def send_ack(action, user_id=None, success=True, error=None, extra_data=None):
     payload = {
         "type": "ACK",
         "action": action,
@@ -143,6 +143,9 @@ def send_ack(action, user_id=None, success=True, error=None):
         payload["user_id"] = user_id
     if error:
         payload["error"] = error
+    
+    if extra_data:
+        payload.update(extra_data)
         
     send_notification(payload)
 
@@ -251,6 +254,31 @@ def process_complete_data(data_str):
         topic = "ambient/command/direction"
         mqtt_payload = {"event_type": "direction_change", "direction": direction, "toggleOn": toggle_on, "user_id": user_id, "timestamp": timestamp}
         send_ack("direction_change", user_id, True)
+        
+    elif action == 'timer':
+        duration_sec = payload.get('duration_sec', 0)
+        
+        topic = "ambient/command/timer"
+        mqtt_payload = {
+            "event_type": "timer",
+            "duration_sec": duration_sec,
+            "user_id": user_id,
+            "timestamp": timestamp
+        }
+        server_now = datetime.now()
+        end_time_str = ""
+        
+        if duration_sec > 0:
+            end_time = server_now + timedelta(seconds=duration_sec)
+            end_time_str = end_time.isoformat()
+        
+        print(f'[BLE] Timer set: {duration_sec}s (End: {end_time_str})')
+        
+        send_ack("timer", user_id, True, extra_data={
+            "server_time": server_now.isoformat(),
+            "end_time": end_time_str,
+            "duration_sec": duration_sec
+        })
 
     elif action == 'user_select':
         user_list = payload.get('user_list', [])

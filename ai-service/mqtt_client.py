@@ -48,17 +48,12 @@ class MQTTClient:
         try:
             payload = json.loads(msg.payload.decode())
             
-            # [핵심 수정 부분] 모드 변경 명령 처리
             if msg.topic == "ambient/command/mode":
                 cmd_type = payload.get("type", "motor")
                 
-                # 🛑 중요: type이 'motor'가 아니면(예: wind) AI는 이 메시지를 무시해야 함.
-                # 그렇지 않으면 current_mode가 'natural_wind' 등으로 바뀌어 트래킹이 멈춤.
                 if cmd_type != "motor":
-                    # print(f"[AI] Ignoring non-motor command: {cmd_type}")
                     return 
 
-                # type이 motor일 때만 상태 변경 진행
                 if self.on_mode_change:
                     self.on_mode_change(payload.get('mode'))
 
@@ -89,7 +84,6 @@ class MQTTClient:
         except Exception as e:
             print(f"[MQTT] Error: {e}")
 
-    # ... (이하 get_current_session, publish 함수들은 기존 유지) ...
     def get_current_session(self):
         with self.lock: return self.current_session_id, self.selected_user_ids.copy()
 
