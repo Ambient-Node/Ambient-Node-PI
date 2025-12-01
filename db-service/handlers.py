@@ -1,9 +1,8 @@
-"""이벤트 핸들러"""
+"""이벤트 핸들러 (Payload 구조 반영 업데이트)"""
 
 import json
 import uuid
 from datetime import datetime
-
 
 class EventHandlers:
     def __init__(self, db, mqtt_client):
@@ -13,9 +12,7 @@ class EventHandlers:
         
         self._load_active_session()
 
-
     def _load_active_session(self):
-        """DB에서 현재 활성 세션 복구"""
         try:
             query = """
             SELECT session_id
@@ -34,19 +31,17 @@ class EventHandlers:
         except Exception as e:
             print(f"[Handler] Failed to load active session: {e}")
 
-
     def handle_user_register(self, payload):
-        """사용자 등록"""
         user_id = payload.get('user_id')
         username = payload.get('username')
         image_path = payload.get('image_path')
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
         query = """
         INSERT INTO users (user_id, username, image_path, created_at)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (user_id) DO UPDATE
-        SET username = EXCLUDED.username, updated_at = CURRENT_TIMESTAMP
+        SET username = EXCLUDED.username, image_path = EXCLUDED.image_path, updated_at = CURRENT_TIMESTAMP
         """
         self.db.execute(query, (user_id, username, image_path, timestamp))
         print(f"[Handler] User registered: {username} ({user_id})")
@@ -57,13 +52,10 @@ class EventHandlers:
             "timestamp": datetime.now().isoformat()
         })
 
-
     def handle_user_select(self, payload):
-        """사용자 선택 - 세션 생성"""
         user_list = payload.get('user_list', [])
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
-        # 1. 기존 세션 종료
         if self.current_session_id:
             query = """
             UPDATE user_sessions
@@ -73,7 +65,6 @@ class EventHandlers:
             self.db.execute(query, (timestamp, self.current_session_id))
             print(f"[Handler] Session ended: {self.current_session_id}")
 
-        # 2. 새 세션 생성
         if len(user_list) > 0:
             session_id = f"sess-{uuid.uuid4().hex[:12]}"
             user_ids = [u['user_id'] for u in user_list]
@@ -96,7 +87,6 @@ class EventHandlers:
             }, qos=1, retain=True)
 
         else:
-            # 전체 해제
             self.current_session_id = None
             print("[Handler] All users deselected")
 
@@ -106,9 +96,7 @@ class EventHandlers:
                 "timestamp": timestamp
             }, qos=1, retain=True)
 
-
     def handle_session_request(self, payload):
-        """현재 활성 세션 정보 요청 처리"""
         try:
             query = """
             SELECT session_id, selected_user_ids, session_start
@@ -138,16 +126,13 @@ class EventHandlers:
                 self.current_session_id = session_id
 
             self.mqtt.publish("ambient/session/active", resp, qos=1, retain=True)
-            print(f"[Handler] Session request handled: {resp['session_id']}")
         except Exception as e:
             print(f"[Handler] Failed to handle session request: {e}")
 
-
     def handle_user_update(self, payload):
-        """사용자 정보 수정"""
         user_id = payload.get('user_id')
         username = payload.get('username')
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
         query = """
         UPDATE users
@@ -156,11 +141,9 @@ class EventHandlers:
         """
         self.db.execute(query, (username, timestamp, user_id))
         print(f"[Handler] User updated: {user_id} -> {username}")
-        pass
 
     def handle_user_delete(self, payload):
         user_id = payload.get('user_id')
-        timestamp = payload.get('timestamp')
         
         try:
             self.db.execute("DELETE FROM device_events WHERE user_id = %s", (user_id,))
@@ -178,12 +161,10 @@ class EventHandlers:
             print(f"[Handler] Failed to delete user {user_id}: {e}")
 
     def handle_speed_change(self, payload):
-        """풍속 변경"""
         speed = payload.get('speed')
-        user_id = payload.get('user_id')  # 추가
-        timestamp = payload.get('timestamp')
+        user_id = payload.get('user_id')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
-        # 1. current_status 업데이트
         query = """
         UPDATE current_status
         SET fan_speed = %s, last_updated = %s
@@ -191,7 +172,6 @@ class EventHandlers:
         """
         self.db.execute(query, (speed, timestamp))
 
-        # 2. device_events 로그 (user_id 추가)
         log_query = """
         INSERT INTO device_events
         (session_id, user_id, event_type, event_data, timestamp)
@@ -199,21 +179,20 @@ class EventHandlers:
         """
         self.db.execute(log_query, (
             self.current_session_id,
-            user_id,  # 추가
+            user_id,
             'speed_change',
             json.dumps({"speed": speed}),
             timestamp
         ))
         print(f"[Handler] Speed changed: {speed} (user: {user_id})")
 
-
     def handle_direction_change(self, payload):
         """각도 변경"""
         direction = payload.get('direction')
+        toggle_on = payload.get('toggleOn', 0)
         user_id = payload.get('user_id')
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
-        # device_events 로그 (user_id 추가)
         log_query = """
         INSERT INTO device_events
         (session_id, user_id, event_type, event_data, timestamp)
@@ -221,29 +200,33 @@ class EventHandlers:
         """
         self.db.execute(log_query, (
             self.current_session_id,
-            user_id,  # 추가
+            user_id,
             'direction_change',
-            json.dumps({"direction": direction}),
+            json.dumps({"direction": direction, "toggleOn": toggle_on}),
             timestamp
         ))
-        print(f"[Handler] direction changed: {direction} (user: {user_id})")
-
+        print(f"[Handler] Direction: {direction} (user: {user_id})")
 
     def handle_mode_change(self, payload):
-        """모드 변경"""
+        """모드 변경 (Type 구분 처리: motor vs wind)"""
         mode = payload.get('mode')
-        user_id = payload.get('user_id')  # 추가
-        timestamp = payload.get('timestamp')
+        cmd_type = payload.get('type', 'motor') 
+        user_id = payload.get('user_id')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
-        # current_status 업데이트
-        query = """
-        UPDATE current_status
-        SET rotation_mode = %s, last_updated = %s
-        WHERE id = 1
-        """
-        self.db.execute(query, (mode, timestamp))
+        if cmd_type == 'motor':
+            query = """
+            UPDATE current_status
+            SET rotation_mode = %s, last_updated = %s
+            WHERE id = 1
+            """
+            self.db.execute(query, (mode, timestamp))
 
-        # device_events 로그 (user_id 추가)
+        event_data = {
+            "type": cmd_type,
+            "mode": mode
+        }
+        
         log_query = """
         INSERT INTO device_events
         (session_id, user_id, event_type, event_data, timestamp)
@@ -251,22 +234,18 @@ class EventHandlers:
         """
         self.db.execute(log_query, (
             self.current_session_id,
-            user_id,  # 추가
+            user_id,
             'mode_change',
-            json.dumps({"mode": mode}),
+            json.dumps(event_data),
             timestamp
         ))
-        print(f"[Handler] Mode changed: {mode} (user: {user_id})")
+        print(f"[Handler] Mode changed: {mode} (Type: {cmd_type}, user: {user_id})")
         
     def handle_timer_set(self, payload):
-        """타이머 설정 기록"""
         duration_sec = payload.get('duration_sec')
         user_id = payload.get('user_id')
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
 
-        # device_events 로그 기록
-        # event_type: 'timer'
-        # event_data: {"duration_sec": 3600}
         log_query = """
         INSERT INTO device_events
         (session_id, user_id, event_type, event_data, timestamp)
@@ -281,14 +260,15 @@ class EventHandlers:
         ))
         print(f"[Handler] Timer set: {duration_sec}s (user: {user_id})")
 
-
-
     def handle_face_detected(self, payload):
         """얼굴 인식"""
         session_id = payload.get('session_id')
         user_id = payload.get('user_id')
         confidence = payload.get('confidence')
-        timestamp = payload.get('timestamp')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
+
+        if not session_id:
+            session_id = self.current_session_id
 
         query = """
         INSERT INTO device_events
@@ -302,15 +282,16 @@ class EventHandlers:
             json.dumps({"confidence": confidence}),
             timestamp
         ))
-        print(f"[Handler] Face detected: {user_id}")
-
 
     def handle_face_lost(self, payload):
         """얼굴 추적 종료"""
         session_id = payload.get('session_id')
         user_id = payload.get('user_id')
-        duration_seconds = payload.get('duration_seconds')
-        timestamp = payload.get('timestamp')
+        duration = payload.get('duration_seconds')
+        timestamp = payload.get('timestamp') or datetime.now().isoformat()
+
+        if not session_id:
+            session_id = self.current_session_id
 
         query = """
         INSERT INTO device_events
@@ -321,11 +302,10 @@ class EventHandlers:
             session_id,
             user_id,
             'face_lost',
-            json.dumps({"duration_seconds": duration_seconds}),
+            json.dumps({"duration_seconds": duration}),
             timestamp
         ))
-        print(f"[Handler] Face lost: {user_id}")
-
+        print(f"[Handler] Face lost: {user_id} (duration: {duration}s)")
 
     def handle_stats_request(self, payload):
         """통계 요청 처리"""
@@ -343,8 +323,8 @@ class EventHandlers:
                 data = self._get_mode_ratio(period)
             elif stat_type == 'pattern':
                 data = self._get_usage_pattern(period, user_id)
-            elif stat_type == 'user_comparison':
-                data = self._get_user_comparison(period)
+            elif stat_type == 'timer_count': 
+                data = self._get_timer_stats(period)
             else:
                 data = {"error": "Unknown stat type"}
             
@@ -365,143 +345,75 @@ class EventHandlers:
                 "timestamp": datetime.now().isoformat()
             })
 
+    # --- 통계 집계 함수들 ---
 
     def _get_usage_stats(self, period):
-        """시간대별 사용량"""
         if period == 'day':
             query = """
-            SELECT
-                date_trunc('hour', session_start) AS hour,
-                SUM(EXTRACT(EPOCH FROM 
-                    COALESCE(session_end, CURRENT_TIMESTAMP) - session_start
-                ) / 60) AS usage_minutes
-            FROM user_sessions
-            WHERE DATE(session_start) = CURRENT_DATE
-            GROUP BY hour
-            ORDER BY hour
+            SELECT date_trunc('hour', session_start) AS hour,
+                   SUM(EXTRACT(EPOCH FROM COALESCE(session_end, CURRENT_TIMESTAMP) - session_start) / 60)
+            FROM user_sessions WHERE DATE(session_start) = CURRENT_DATE
+            GROUP BY hour ORDER BY hour
             """
-        elif period == 'week':
+        else:
             query = """
-            SELECT
-                DATE(session_start) AS date,
-                SUM(EXTRACT(EPOCH FROM 
-                    COALESCE(session_end, CURRENT_TIMESTAMP) - session_start
-                ) / 60) AS usage_minutes
-            FROM user_sessions
-            WHERE session_start >= date_trunc('week', CURRENT_DATE)
-            GROUP BY date
-            ORDER BY date
+            SELECT DATE(session_start) AS date,
+                   SUM(EXTRACT(EPOCH FROM COALESCE(session_end, CURRENT_TIMESTAMP) - session_start) / 60)
+            FROM user_sessions WHERE session_start >= date_trunc('week', CURRENT_DATE)
+            GROUP BY date ORDER BY date
             """
-        
         self.db.execute(query)
-        results = self.db.fetchall()
-        return [{"time": str(row[0]), "minutes": float(row[1])} for row in results]
-
+        return [{"time": str(row[0]), "minutes": float(row[1])} for row in self.db.fetchall()]
 
     def _get_speed_distribution(self, period):
-        """풍속별 사용 시간"""
-        date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else \
-                    "timestamp >= date_trunc('week', CURRENT_DATE)"
-        
+        date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else "timestamp >= date_trunc('week', CURRENT_DATE)"
         query = f"""
         WITH speed_changes AS (
-            SELECT 
-                timestamp,
-                (event_data->>'speed')::INT AS speed,
-                LEAD(timestamp) OVER (ORDER BY timestamp) AS next_timestamp
-            FROM device_events
-            WHERE event_type = 'speed_change' AND {date_filter}
+            SELECT timestamp, (event_data->>'speed')::INT AS speed,
+                   LEAD(timestamp) OVER (ORDER BY timestamp) AS next_timestamp
+            FROM device_events WHERE event_type = 'speed_change' AND {date_filter}
         )
-        SELECT 
-            speed,
-            SUM(EXTRACT(EPOCH FROM 
-                COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp
-            ) / 60) AS usage_minutes
-        FROM speed_changes
-        WHERE speed IS NOT NULL
-        GROUP BY speed
-        ORDER BY speed
+        SELECT speed, SUM(EXTRACT(EPOCH FROM COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp) / 60)
+        FROM speed_changes WHERE speed IS NOT NULL
+        GROUP BY speed ORDER BY speed
         """
-        
         self.db.execute(query)
-        results = self.db.fetchall()
-        return [{"speed": row[0], "minutes": float(row[1])} for row in results]
-
+        return [{"speed": row[0], "minutes": float(row[1])} for row in self.db.fetchall()]
 
     def _get_mode_ratio(self, period):
-        """AI/Manual 모드 비율"""
-        date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else \
-                    "timestamp >= date_trunc('week', CURRENT_DATE)"
-        
+        date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else "timestamp >= date_trunc('week', CURRENT_DATE)"
         query = f"""
         WITH mode_changes AS (
-            SELECT 
-                timestamp,
-                event_data->>'mode' AS mode,
-                LEAD(timestamp) OVER (ORDER BY timestamp) AS next_timestamp
-            FROM device_events
-            WHERE event_type = 'mode_change' AND {date_filter}
+            SELECT timestamp, event_data->>'mode' AS mode,
+                   LEAD(timestamp) OVER (ORDER BY timestamp) AS next_timestamp
+            FROM device_events WHERE event_type = 'mode_change' AND {date_filter}
         )
-        SELECT 
-            mode,
-            SUM(EXTRACT(EPOCH FROM 
-                COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp
-            ) / 3600) AS usage_hours,
-            ROUND(100.0 * SUM(EXTRACT(EPOCH FROM 
-                COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp
-            )) / SUM(SUM(EXTRACT(EPOCH FROM 
-                COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp
-            ))) OVER (), 1) AS percentage
-        FROM mode_changes
-        WHERE mode IS NOT NULL
-        GROUP BY mode
+        SELECT mode,
+               SUM(EXTRACT(EPOCH FROM COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp) / 3600),
+               ROUND(100.0 * SUM(EXTRACT(EPOCH FROM COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp)) / 
+                     SUM(SUM(EXTRACT(EPOCH FROM COALESCE(next_timestamp, CURRENT_TIMESTAMP) - timestamp))) OVER (), 1)
+        FROM mode_changes WHERE mode IS NOT NULL GROUP BY mode
         """
-        
         self.db.execute(query)
-        results = self.db.fetchall()
-        return [{"mode": row[0], "hours": float(row[1]), "percentage": float(row[2])} 
-                for row in results]
-
+        return [{"mode": row[0], "hours": float(row[1]), "percentage": float(row[2])} for row in self.db.fetchall()]
 
     def _get_usage_pattern(self, period, user_id):
-        """사용 패턴 분석"""
         query = """
-        SELECT 
-            EXTRACT(HOUR FROM session_start) AS hour_of_day,
-            COUNT(*) AS session_count,
-            AVG(EXTRACT(EPOCH FROM 
-                COALESCE(session_end, session_start + INTERVAL '2 hours') - session_start
-            ) / 60) AS avg_duration_minutes
-        FROM user_sessions
-        WHERE session_start >= CURRENT_DATE - INTERVAL '7 days'
-        GROUP BY hour_of_day
-        ORDER BY session_count DESC
-        LIMIT 3
+        SELECT EXTRACT(HOUR FROM session_start) AS hour_of_day, COUNT(*),
+               AVG(EXTRACT(EPOCH FROM COALESCE(session_end, session_start + INTERVAL '2 hours') - session_start) / 60)
+        FROM user_sessions WHERE session_start >= CURRENT_DATE - INTERVAL '7 days'
+        GROUP BY hour_of_day ORDER BY 2 DESC LIMIT 3
         """
-        
         self.db.execute(query)
-        results = self.db.fetchall()
-        return [{"hour": int(row[0]), "count": row[1], "avg_minutes": float(row[2])} 
-                for row in results]
+        return [{"hour": int(row[0]), "count": row[1], "avg_minutes": float(row[2])} for row in self.db.fetchall()]
 
-
-    def _get_user_comparison(self, period):
-        """사용자별 비교 통계"""
-        query = """
-        SELECT 
-            u.username,
-            DATE(us.session_start) AS date,
-            SUM(EXTRACT(EPOCH FROM 
-                COALESCE(us.session_end, CURRENT_TIMESTAMP) - us.session_start
-            ) / 60) AS usage_minutes
-        FROM user_sessions us
-        JOIN users u ON u.user_id = ANY(us.selected_user_ids)
-        WHERE us.session_start >= date_trunc('week', CURRENT_DATE)
-        GROUP BY u.username, DATE(us.session_start)
-        ORDER BY date, username
+    def _get_timer_stats(self, period):
+        date_filter = "DATE(timestamp) = CURRENT_DATE" if period == 'day' else "timestamp >= date_trunc('week', CURRENT_DATE)"
+        query = f"""
+        SELECT COUNT(*), SUM((event_data->>'duration_sec')::float) / 60
+        FROM device_events
+        WHERE event_type = 'timer' AND {date_filter}
         """
-        
         self.db.execute(query)
-        results = self.db.fetchall()
-        return [{"username": row[0], "date": str(row[1]), "minutes": float(row[2])} 
-                for row in results]
+        row = self.db.fetchone()
+        return {"count": row[0], "total_minutes": float(row[1]) if row[1] else 0.0}
