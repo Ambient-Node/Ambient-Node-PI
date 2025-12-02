@@ -51,7 +51,7 @@
 1.  **Flutter App**: BLE 클라이언트 및 사용자 인터페이스 (UI/UX)
 2.  **BLE Gateway**: BLE ↔ MQTT 프로토콜 중계 (Python + bluezero)
 3.  **AI Service**: 얼굴 인식 및 실시간 추적 (FaceNet + MediaPipe)
-4.  **Fan Service**: 모터 제어 및 하드웨어 통신 (UART)
+4.  **Fan Service**: XIAO RP2040 통신 (UART)
 5.  **DB Service**: 데이터 영속성 관리 및 통계 분석 (PostgreSQL)
 6.  **MQTT Broker**: 서비스 간 메시지 버스 (Mosquitto)
 
