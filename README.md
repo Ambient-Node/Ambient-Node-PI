@@ -147,7 +147,9 @@ P X                     # 추적 종료 신호
 ### 4️⃣ DB Service
 - Tech Stack: PostgreSQL 15, psycopg2
 - Database ERD:
-<img width="80%" alt="DB ERD" src="https://github.com/user-attachments/assets/69d1c8dd-6338-4678-aa46-66e97221be37" />
+<div align="center">
+  <img width="80%" alt="DB ERD" src="https://github.com/user-attachments/assets/69d1c8dd-6338-4678-aa46-66e97221be37" />
+</div>
 <br><br>
 
 **💾 데이터 구조 특징 (Hybrid Schema)**
