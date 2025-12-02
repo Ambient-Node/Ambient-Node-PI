@@ -1,0 +1,19 @@
+[Unit]
+Description=Ambient Node Docker Stack
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/ambient-node
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300
+TimeoutStopSec=300
+TimeoutSec=300
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+.env
+ai-service/__pycache__/
+db-service/__pycache__/
+fan-service/__pycache__/
+services/.venv/
+

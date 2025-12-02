@@ -1,0 +1,19 @@
+# MacBook에서
+cat > .dockerignore << 'EOF'
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.git/
+.gitignore
+.vscode/
+*.log
+.DS_Store
+README.md
+*.tar
+*.tar.gz
+.env
+captures/
+users/
+EOF
