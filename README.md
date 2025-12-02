@@ -59,16 +59,7 @@ chmod +x init_setting.sh
 - /var/lib/ambient-node 데이터 디렉토리 생성 및 권한 부여
 
 ## 🛠️ 서비스 실행 방법
-1. 메인 시스템 실행 (Docker Compose)
-AI, DB, Fan, MQTT 브로커 등 핵심 컨테이너를 실행합니다.
-```
-# 이미지 빌드 및 백그라운드 실행
-docker compose up -d --build
-
-# 실행 상태 확인
-docker compose ps
-```
-2. 호스트 서비스 실행 (BLE & Camera)
+### 호스트 서비스 실행 (BLE & Camera & Docker compose)
 BLE와 카메라는 하드웨어 접근성을 위해 Systemd 서비스로 관리됩니다.
 ```
 # 서비스 파일 등록
@@ -78,6 +69,7 @@ sudo systemctl daemon-reload
 # 서비스 시작 및 부팅 시 자동 실행 설정
 sudo systemctl enable --now rpicam-stream.service       # 카메라 스트리밍
 sudo systemctl enable --now ambient-ble-gateway.service # BLE 게이트웨이
+sudo systemctl enable --now ambient-node.service        # Docker
 ```
 
 ## 📡 주요 기능 상세 (Technical Highlights)
