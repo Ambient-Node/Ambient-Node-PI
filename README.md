@@ -1,8 +1,8 @@
-#🌪️ Ambient Node: AI Smart Air Circulator
-AI 비전 기반 사용자 추적형 스마트 에어서큘레이터의 펌웨어/소프트웨어 레포지토리입니다.
+## Ambient Node: AI Smart Air Circulator
+AI 비전 기반 사용자 추적형 스마트 에어서큘레이터의 펌웨어/소프트웨어 레포지토리입니다.</br>
 Raspberry Pi 5를 엣지 디바이스로 활용하며, MSA(Micro Service Architecture) 기반의 Docker 컨테이너들과 호스트 레벨의 BLE Gateway가 유기적으로 연동됩니다.
 
-## 📂 프로젝트 구조 (Project Structure)
+### 📂 프로젝트 구조 (Project Structure)
 ```
 /home/pi/ambient-node/
 ├── docker-compose.yml           
@@ -10,6 +10,7 @@ Raspberry Pi 5를 엣지 디바이스로 활용하며, MSA(Micro Service Archite
 │   ├── ble_gateway.py            
 │   ├── ambient-node.service      # systemd 서비스 파일 (Docker Compose 실행용)
 │   ├── ambient-ble-gateway.service # systemd 서비스 파일 (BLE Gateway 실행용)
+│   ├── setup_ble_gateway.sh     #  필수 패키지 설치, systemd 서비스 유닛 설치 실행 파일
 │   └── rpicam-stream.service     # 카메라 스트리밍 서비스
 ├── ai-service/
 │   ├── Dockerfile
@@ -45,3 +46,5 @@ Raspberry Pi 5를 엣지 디바이스로 활용하며, MSA(Micro Service Archite
 └── mqtt/                         # MQTT 로그 및 데이터
 
 ```
+
+## 🚀 설치 및 실행 가이드 (Getting Started)
