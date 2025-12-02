@@ -41,6 +41,8 @@
 
 </div>
 
+<br>
+
 ## 📂 시스템 아키텍처 (System Architecture)
 
 <img width="100%" alt="System Architecture" src="https://github.com/user-attachments/assets/9f7235a8-bba6-4928-8e17-4e2fa2de6287" />
