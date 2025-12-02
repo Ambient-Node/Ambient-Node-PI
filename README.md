@@ -123,7 +123,7 @@ sudo systemctl enable --now ambient-node.service        # Docker Compose (전체
   - Protocol Bridge: BLE 명령을 MQTT 메시지로 변환하여 내부망에 전파, 상태 변화를 BLE Notify로 앱에 전송.
   - Reliability: JSON 파싱 검증, 에러 처리 및 ACK 응답 시스템 구현.<br><br>
 ### 2️⃣ AI Service
-- Tech Stack: TensorFlow Lite, MediaPipe, OpenCV
+- Tech Stack: Python 3.10.13, TensorFlow Lite, MediaPipe, OpenCV
 - 주요 기능:
   - 얼굴 인식: FaceNet 기반 임베딩 생성 및 코사인 유사도 비교.
   - 얼굴 추적: 프레임 간 객체 추적(Tracking ID 부여) 및 DB 사용자 매핑.
