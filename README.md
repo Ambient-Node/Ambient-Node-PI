@@ -18,6 +18,29 @@
 
 <br>
 
+## 🛠️ Tech Stack
+
+<div align="center">
+
+### Core & Architecture
+![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Systemd](https://img.shields.io/badge/Systemd-232A38?style=for-the-badge&logo=linux&logoColor=white)
+
+### Backend & AI
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![TensorFlow](https://img.shields.io/badge/TensorFlow-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
+
+### Database
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+
+### Communication
+![Bluetooth](https://img.shields.io/badge/Bluetooth-0082FC?style=for-the-badge&logo=bluetooth&logoColor=white)
+![MQTT](https://img.shields.io/badge/MQTT-660066?style=for-the-badge&logo=mqtt&logoColor=white)
+
+</div>
+
 ## 📂 시스템 아키텍처 (System Architecture)
 
 <img width="100%" alt="System Architecture" src="https://github.com/user-attachments/assets/9f7235a8-bba6-4928-8e17-4e2fa2de6287" />
