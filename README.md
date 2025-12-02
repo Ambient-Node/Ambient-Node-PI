@@ -118,7 +118,7 @@ R {toggle}              # 회전 모드 On/Off (1/0)
 P ({x},{y})             # 얼굴 좌표 전송 (AI Tracking)
 P X                     # 추적 종료 신호
 ```
-<br>
+
 ### 4️⃣ DB Service
 - Tech Stack: PostgreSQL 15, psycopg2
 - Database ERD:
