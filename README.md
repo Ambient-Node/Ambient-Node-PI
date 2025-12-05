@@ -206,12 +206,17 @@ P X                     # 추적 종료 (Stop Tracking)
 
 <br>
 
+**Entity Relationship Diagram (ERD)** <br>
+users와 user_sessions는 정규화된 테이블로 관리하며, 로그성 데이터인 device_events는 JSONB를 활용해 유연하게 저장합니다.
+<img width="1221" height="607" alt="image" src="https://github.com/user-attachments/assets/be06c7b5-4b18-403f-a820-56e60e482d13" />
+
 **💾 하이브리드 데이터 스키마 (Hybrid Schema)**
 
 | **데이터 유형** | **저장 방식** | **용도** |
 | :--- | :--- | :--- |
 | **Structured** | RDBMS Table | `users`, `user_sessions` 등 관계형 데이터 및 무결성 관리 |
 | **Semi-structured** | **JSONB** Column | `device_events` 테이블 내 센서/로그 데이터의 유연한 확장성 확보 |
+
 <br>
 
 **📋 device_events 테이블 구조 (JSONB 활용)**
@@ -232,8 +237,13 @@ P X                     # 추적 종료 (Stop Tracking)
 - Mode Duration: 자연풍, 회전 등 기능별 사용 시간 비율
 - Speed Distribution: 선호하는 풍속 분포도
 - Timer Stats: 타이머 사용 빈도
-
+  
+<br>
 <hr>
+<br>
+
+## System Sequence Diagram
+<img width="5015" height="6694" alt="Untitled diagram-2025-12-05-075919" src="https://github.com/user-attachments/assets/9a00222f-a3d9-478b-a130-60513ae7d2fb" />
 
 ## 📨 MQTT 토픽 설계 (Message Bus)
 
