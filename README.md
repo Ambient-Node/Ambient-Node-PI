@@ -116,7 +116,7 @@ chmod +x init_setting.sh
 - /var/lib/ambient-node 데이터 디렉토리 생성 및 권한 부여
 
 **2. 서비스 실행**<br>
-BLE와 카메라는 하드웨어 접근성을 위해 **Systemd**로, 나머지 서비스는 **Docker**로 관리됩니다.
+
 ```
 # 서비스 파일 등록
 sudo cp Services/*.service /etc/systemd/system/
