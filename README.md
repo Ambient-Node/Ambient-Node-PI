@@ -239,11 +239,11 @@ users와 user_sessions는 정규화된 테이블로 관리하며, 로그성 데�
 - Timer Stats: 타이머 사용 빈도
   
 <br>
-<hr>
-<br>
 
 ## System Sequence Diagram
 <img width="5015" height="6694" alt="Untitled diagram-2025-12-05-075919" src="https://github.com/user-attachments/assets/9a00222f-a3d9-478b-a130-60513ae7d2fb" />
+
+<br>
 
 ## 📨 MQTT 토픽 설계 (Message Bus)
 
