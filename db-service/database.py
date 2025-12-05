@@ -1,4 +1,5 @@
-"""PostgreSQL 데이터베이스 관리"""
+
+"""PostgreSQL 데이터베이스 관리 (Schema Update: fan_speed -> speed)"""
 
 import psycopg2
 import psycopg2.extras
@@ -36,13 +37,19 @@ class Database:
     def init_tables(self):
         """필요한 테이블/인덱스 초기화"""
         
-        # 1. 기존의 엄격한 제약조건(CHECK) 삭제 (이미 테이블이 생성된 경우 에러 해결용)
+        try:
+            self.execute("ALTER TABLE current_status RENAME COLUMN fan_speed TO speed")
+            print("[DB] Renamed column 'fan_speed' to 'speed'")
+        except Exception: pass
+
+        try:
+            self.execute("ALTER TABLE current_status RENAME COLUMN rotation_mode TO mode")
+            print("[DB] Renamed column 'rotation_mode' to 'mode'")
+        except Exception: pass
+
         try:
             self.execute("ALTER TABLE current_status DROP CONSTRAINT IF EXISTS current_status_rotation_mode_check")
-            # self.conn.commit() # execute 내부에서 commit 함
-            print("[DB] Removed legacy constraint 'current_status_rotation_mode_check'")
-        except Exception as e:
-            print(f"[DB] Note: Could not drop constraint (might not exist): {e}")
+        except Exception: pass
 
         queries = [
             # users
@@ -77,30 +84,25 @@ class Database:
             )
             """,
             # current_status (싱글톤)
-            # [수정] CHECK 제약조건 삭제 (모든 문자열 허용)
             """
             CREATE TABLE IF NOT EXISTS current_status (
                 id INT PRIMARY KEY DEFAULT 1,
-                fan_speed INT DEFAULT 0 CHECK (fan_speed BETWEEN 0 AND 5),
-                rotation_mode VARCHAR(50) DEFAULT 'manual',
+                speed INT DEFAULT 0 CHECK (speed BETWEEN 0 AND 5),
+                mode VARCHAR(50) DEFAULT 'manual_control',
                 last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT single_row CHECK (id = 1)
             )
             """,
-            # current_status 초기 레코드
+            # 초기 레코드 삽입
             """
             INSERT INTO current_status (id)
             VALUES (1)
             ON CONFLICT (id) DO NOTHING
             """,
-            # 인덱스들
+            # 인덱스
             "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON device_events(timestamp DESC)",
             "CREATE INDEX IF NOT EXISTS idx_events_session ON device_events(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_events_user ON device_events(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_active ON user_sessions(is_active) WHERE is_active = TRUE",
-            "CREATE INDEX IF NOT EXISTS idx_events_type_time ON device_events(event_type, timestamp DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_events_user_time ON device_events(user_id, timestamp DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_start ON user_sessions(session_start DESC)",
         ]
 
         for q in queries:
@@ -108,11 +110,10 @@ class Database:
                 self.execute(q)
             except Exception as e:
                 print(f"[DB] Init error: {e}")
-
-        print("[DB] ✅ Tables initialized")
+        
+        print("[DB] Tables initialized")
 
     def execute(self, query, params=None):
-        """쿼리 실행"""
         try:
             self.cursor.execute(query, params)
             self.conn.commit()
@@ -122,17 +123,12 @@ class Database:
             raise
 
     def fetchone(self):
-        """단일 행 조회"""
         return self.cursor.fetchone()
 
     def fetchall(self):
-        """전체 행 조회"""
         return self.cursor.fetchall()
 
     def close(self):
-        """연결 종료"""
-        if self.cursor:
-            self.cursor.close()
-        if self.conn:
-            self.conn.close()
+        if self.cursor: self.cursor.close()
+        if self.conn: self.conn.close()
         print("[DB] Connection closed")
