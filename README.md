@@ -4,9 +4,9 @@
 
 **AI 비전 기반 사용자 추적형 스마트 에어서큘레이터**
 
-> **2025 캡스톤 디자인 프로젝트**
+> **2025-2 캡스톤 디자인 프로젝트**
 >
-> 🍓 **Platform:** Raspberry Pi 5 (Bookworm 64-bit)
+> 🍓 **Platform:** Raspberry Pi 5 (Bookworm 64-bit) <br>
 > 🏗️ **Architecture:** MSA (Micro Service Architecture) + BLE Hybrid
 
 </div>
@@ -14,7 +14,7 @@
 ---
 
 본 프로젝트는 엣지 디바이스(Raspberry Pi)에서 독립적으로 구동되는 **보안형 AI 가전 소프트웨어 스택**입니다.
-클라우드 연결 없이 온디바이스 AI로 사용자를 추적하며, 자체 개발한 **BLE 프로토콜**을 통해 모바일 앱과 안정적으로 연동됩니다.
+클라우드 연결 없이 온디바이스 AI로 사용자를 추적하며, **BLE 프로토콜**을 통해 모바일 앱과 안정적으로 연동됩니다.
 
 <br>
 
@@ -47,13 +47,27 @@
 
 <img width="100%" alt="System Architecture" src="https://github.com/user-attachments/assets/9f7235a8-bba6-4928-8e17-4e2fa2de6287" />
 
-### 🧩 주요 컴포넌트
+### 주요 컴포넌트
 1.  **Flutter App**: BLE 클라이언트 및 사용자 인터페이스 (UI/UX)
 2.  **BLE Gateway**: BLE ↔ MQTT 프로토콜 중계 (Python + bluezero)
 3.  **AI Service**: 얼굴 인식 및 실시간 추적 (FaceNet + MediaPipe)
 4.  **Fan Service**: XIAO RP2040 통신 (UART)
 5.  **DB Service**: 데이터 영속성 관리 및 통계 분석 (PostgreSQL)
 6.  **MQTT Broker**: 서비스 간 메시지 버스 (Mosquitto)
+
+<hr>
+
+## User Context & Session Management
+이 프로젝트는 명시적인 세션 기반(Session-based)으로 사용자 행동을 분석합니다. <br>
+앱에서 사용자를 선택하는 시점에 세션이 시작됩니다.
+### 1. 세션 라이프사이클 (Session Lifecycle)
+*   **세션 시작 (Start):** 앱에서 사용자를 선택하면 `ambient/user/select` 이벤트가 발생하며 새로운 `session_id`가 발급됩니다.
+*   **활성 상태 (Active):** 세션이 유지되는 동안 발생하는 모든 제어(풍속, 회전, 모드)는 해당 `session_id`와 매핑되어 저장됩니다.
+*   **얼굴 인식 로그:** 세션 중 AI가 사용자를 감지하면 `face_detected` 이벤트를 기록하여, 실제 사용자가 기기 앞에 머문 시간을 추적합니다.
+*   **세션 종료 (End):** 사용자 선택 해제 시 세션이 닫히며 종료 시간이 기록됩니다.
+
+### 2. 다중 사용자 지원
+*   `user_sessions` 테이블의 `selected_user_ids` 필드는 **배열(Array)** 형태로, 필요에 따라 여러 명의 사용자를 하나의 세션으로 묶을 수 있도록 설계되었습니다.
 
 <hr>
 
@@ -83,7 +97,7 @@
 ```
 <hr>
 
-## 🚀 설치 및 실행 가이드 (Getting Started)
+## 설치 및 실행 가이드 (Getting Started)
 **1. 자동 설치 스크립트 실행 (Recommended)**<br>
 필요한 시스템 패키지, Python 가상환경, Docker 권한 설정 등을 한 번에 처리합니다.
 
@@ -115,47 +129,92 @@ sudo systemctl enable --now ambient-node.service        # Docker Compose (전체
 ```
 <hr>
 
-## 📡 주요 기능 상세 (Technical Highlights)
-### 1️⃣ BLE Gateway (Host Process)
-- Tech Stack: Python 3.11, bluezero, paho-mqtt, systemd
-- 주요 기능:
-  - BLE Peripheral: Flutter 앱과 GATT 통신 수행, 대용량 데이터(이미지) 청크(Chunk) 수신 및 조립.
-  - Protocol Bridge: BLE 명령을 MQTT 메시지로 변환하여 내부망에 전파, 상태 변화를 BLE Notify로 앱에 전송.
-  - Reliability: JSON 파싱 검증, 에러 처리 및 ACK 응답 시스템 구현.<br><br>
-### 2️⃣ AI Service
-- Tech Stack: Python 3.10.13, TensorFlow Lite, MediaPipe, OpenCV
-- 주요 기능:
-  - 얼굴 인식: FaceNet 기반 임베딩 생성 및 코사인 유사도 비교.
-  - 얼굴 추적: 프레임 간 객체 추적(Tracking ID 부여) 및 DB 사용자 매핑.
-  - 이벤트 발행: face-detected(인식), face-position(좌표, 10Hz), face-lost(소실) 이벤트 발행.<br><br>
-### 3️⃣ Fan Service
-- Tech Stack: Python 3.11, pyserial
-- 주요 기능:
-  - Hardware HAL: MQTT 명령을 해석하여 XIAO RP2040 마이크로컨트롤러로 UART 명령 전송.
-  - Mode Control: AI 좌표를 수신하여 팬 헤드 제어 (Pan-Tilt), 자연풍/회전 모드 관리.<br><br>
+## 주요 기능 상세 (Technical Highlights)
 
-**🔌 UART 명령 프로토콜 (→ XIAO RP2040)**
-```
-S {level}               # 풍속 제어 (0~5)
-A {direction} {toggle}  # 수동 각도 (l, r, u, d, c / 0, 1)
-N {toggle}              # 자연풍 On/Off (1/0)
-R {toggle}              # 회전 모드 On/Off (1/0)
-P ({x},{y})             # 얼굴 좌표 전송 (AI Tracking)
-P X                     # 추적 종료 신호
-```
+각 서비스는 독립적인 컨테이너(또는 프로세스)로 동작하며 MQTT로 통신합니다.
 
-### 4️⃣ DB Service
-- Tech Stack: PostgreSQL 15, psycopg2
-- Database ERD:
-<div align="center">
-  <img width="80%" alt="DB ERD" src="https://github.com/user-attachments/assets/69d1c8dd-6338-4678-aa46-66e97221be37" />
+### 1. BLE Gateway (Host Process)
+> **역할:** 모바일 앱과 라즈베리파이 간의 통신 관문 (Connection & Protocol Bridge)
+
+<div align="left">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/BlueZero-0052CC?style=flat-square&logo=bluetooth&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Paho_MQTT-660066?style=flat-square&logo=eclipse&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Systemd-232A38?style=flat-square&logo=linux&logoColor=white"/>
 </div>
-<br><br>
 
-**💾 데이터 구조 특징 (Hybrid Schema)**
-- 정형 데이터: users, user_sessions 등 관계형 데이터는 테이블로 관리.
-- 비정형 데이터: device_events 테이블의 event_data 컬럼은 JSONB로 관리하여 다양한 센서/로그를 유연하게 저장.
+| **기능 (Feature)** | **세부 내용 (Detail)** |
+| :--- | :--- |
+| **BLE Peripheral** | Flutter 앱과 GATT 연결 수립, 대용량 데이터(이미지) Chunking 수신 및 조립 |
+| **Protocol Bridge** | `BLE Command` ↔ `MQTT Message` 양방향 변환 및 내부망 전파 |
+| **Reliability** | JSON 데이터 파싱 검증, 예외 처리, 요청에 대한 **ACK 응답 시스템** 구현 |
 
+<br>
+
+### 2. AI Service
+> **역할:** 카메라 영상을 분석하여 사용자 신원을 식별하고 위치를 추적 (Vision Intelligence)
+
+<div align="left">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/TensorFlow_Lite-FF6F00?style=flat-square&logo=tensorflow&logoColor=white"/>
+  <img src="https://img.shields.io/badge/MediaPipe-00A8E1?style=flat-square&logo=google&logoColor=white"/>
+  <img src="https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white"/>
+</div>
+
+| **기능 (Feature)** | **세부 내용 (Detail)** |
+| :--- | :--- |
+| **Face Recognition** | **FaceNet** 모델을 이용한 얼굴 임베딩 추출 및 DB 내 사용자 특징 벡터와 코사인 유사도 비교 |
+| **Real-time Tracking** | 프레임 간 객체 추적(Object Tracking), 고유 ID 부여 및 세션 매핑 |
+| **Event Publishing** | • `face-detected`: 신원 식별 성공<br>• `face-position`: 서보모터 제어용 좌표 (10Hz)<br>• `face-lost`: 추적 대상 소실 및 대기 전환 |
+
+<br>
+
+### 3. Fan Service
+> **역할:** 하드웨어 제어 명령을 수행하고 물리적 장치 구동 (Hardware HAL)
+
+<div align="left">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/PySerial-000000?style=flat-square&logo=c&logoColor=white"/>
+  <img src="https://img.shields.io/badge/XIAO_RP2040-00599C?style=flat-square&logo=arduino&logoColor=white"/>
+</div>
+
+| **기능 (Feature)** | **세부 내용 (Detail)** |
+| :--- | :--- |
+| **Mode Control** | AI 좌표 수신에 따른 팬 헤드 추적(Pan-Tilt), 자연풍/회전 모드 로직 관리 |
+| **UART Communication** | MQTT 명령을 해석하여 마이크로컨트롤러(XIAO RP2040)로 Serial 패킷 전송 |
+
+**Protocol Specification (→ MCU)**
+```text
+S {level}               # 풍속 제어 (0~5)
+A {direction} {toggle}  # 수동 각도 조절 (l, r, u, d, c / 0, 1)
+N {toggle}              # 자연풍 모드 On/Off (1/0)
+R {toggle}              # 회전 모드 On/Off (1/0)
+P ({x},{y})             # 얼굴 좌표 전송 (AI Tracking Mode)
+P X                     # 추적 종료 (Stop Tracking)
+```
+
+<br>
+
+### 4. DB Service & Data Schema
+> **역할:** 데이터의 영속성 관리 및 사용자 행동 통계 분석 (Storage & Analytics)
+
+<div align="left">
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Psycopg2-336791?style=flat-square&logo=postgresql&logoColor=white"/>
+  <img src="https://img.shields.io/badge/JSONB-000000?style=flat-square&logo=json&logoColor=white"/>
+</div>
+
+<br>
+
+**💾 하이브리드 데이터 스키마 (Hybrid Schema)**
+
+| **데이터 유형** | **저장 방식** | **용도** |
+| :--- | :--- | :--- |
+| **Structured** | RDBMS Table | `users`, `user_sessions` 등 관계형 데이터 및 무결성 관리 |
+| **Semi-structured** | **JSONB** Column | `device_events` 테이블 내 센서/로그 데이터의 유연한 확장성 확보 |
+<br>
+
+**📋 device_events 테이블 구조 (JSONB 활용)**
 | **이벤트 타입 (event_type)** |	**설명 (Description)** |	**JSONB 데이터 예시 (event_data)**	| **비고** |
 | --- | --- | --- | --- |
 | speed_change |	풍속 조절	|{"speed": 3}	| 0~5단계 속도 기록 |
@@ -164,6 +223,15 @@ P X                     # 추적 종료 신호
 | timer |	타이머 설정	|{"duration_sec": 3600}	| 종료 예약 시간 (초 단위) |
 | face_detected |	얼굴 인식 성공	|{"confidence": 0.85}	| 인식 정확도(신뢰도) 기록 |
 | face_lost |	얼굴 추적 소실 |	{"duration_seconds": 12.5}	| 추적 지속 시간 기록 |
+
+<br>
+
+**📊 통계 집계 기능** <br>
+> DB Service는 축적된 로그를 바탕으로 다음 API를 제공합니다. (handlers.py 내 구현)
+- Total Usage: 일/주 단위 총 사용 시간
+- Mode Duration: 자연풍, 회전 등 기능별 사용 시간 비율
+- Speed Distribution: 선호하는 풍속 분포도
+- Timer Stats: 타이머 사용 빈도
 
 <hr>
 
